@@ -51,7 +51,11 @@ import { Church, formatAttendance } from '../../../../core/models/church.model';
             <svg viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M8 1.5A4.5 4.5 0 003.5 6c0 3 4.5 8.5 4.5 8.5S12.5 9 12.5 6A4.5 4.5 0 008 1.5zM8 8a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>
             {{ church.city }}, {{ church.state }}
           </span>
-          <span *ngIf="church.average_attendance" class="church-card__meta-item">
+          <span *ngIf="church.size" class="church-card__meta-item church-card__meta-item--size" [attr.data-size]="church.size">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M7 8a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM1 14.5a6 6 0 0112 0H1zM14.5 8a2 2 0 100-4 2 2 0 000 4zM11 14.5a3.5 3.5 0 00-1.4-2.8A7.48 7.48 0 0114.5 10a5.5 5.5 0 011 .1 5.5 5.5 0 01.5 4.4H11z"/></svg>
+            {{ church.size === 'small' ? 'Small' : church.size === 'medium' ? 'Mid-size' : 'Large' }}
+          </span>
+          <span *ngIf="!church.size && church.average_attendance" class="church-card__meta-item">
             <svg viewBox="0 0 16 16" fill="currentColor"><path d="M7 8a2.5 2.5 0 100-5 2.5 2.5 0 000 5zM1 14.5a6 6 0 0112 0H1zM14.5 8a2 2 0 100-4 2 2 0 000 4zM11 14.5a3.5 3.5 0 00-1.4-2.8A7.48 7.48 0 0114.5 10a5.5 5.5 0 011 .1 5.5 5.5 0 01.5 4.4H11z"/></svg>
             ~{{ formatAtt(church.average_attendance) }}
           </span>
@@ -149,6 +153,9 @@ import { Church, formatAttendance } from '../../../../core/models/church.model';
       font-size: 0.75rem; color: var(--sanctuary-muted);
     }
     .church-card__meta-item svg { width: 11px; height: 11px; flex-shrink: 0; }
+    .church-card__meta-item--size[data-size="small"] { color: #6b9e6b; }
+    .church-card__meta-item--size[data-size="medium"] { color: #b07d2e; }
+    .church-card__meta-item--size[data-size="large"] { color: var(--sanctuary-accent); }
     .church-card__pastor {
       font-size: 0.75rem; color: var(--sanctuary-muted); margin-bottom: 0.375rem;
     }

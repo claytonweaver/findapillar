@@ -75,7 +75,11 @@
             <span class="pi pi-map-marker"></span>
             {{ church.street_address }}, {{ church.city }}, {{ church.state }} {{ church.zip }}
           </span>
-          <span *ngIf="church.average_attendance">
+          <span *ngIf="church.size">
+            <span class="pi pi-users"></span>
+            {{ church.size === 'small' ? 'Small congregation' : church.size === 'medium' ? 'Mid-size congregation' : 'Large congregation' }}
+          </span>
+          <span *ngIf="!church.size && church.average_attendance">
             <span class="pi pi-users"></span>
             ~{{ church.average_attendance.toLocaleString() }} avg. attendance
           </span>
@@ -130,6 +134,7 @@
             <div class="pastor-card__info">
               <p class="pastor-card__name">{{ pastor!.name }}</p>
               <p class="pastor-card__title">{{ pastor!.title }}</p>
+              <p *ngIf="pastor!.seminary" class="pastor-card__seminary">🎓 {{ pastor!.seminary }}</p>
               <p *ngIf="pastor!.bio" class="pastor-card__bio">{{ pastor!.bio }}</p>
             </div>
           </div>

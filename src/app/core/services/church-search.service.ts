@@ -106,6 +106,6 @@ const CHURCH_SELECT = `
   id, name, slug, description, street_address, city, state, zip,
   lat, lng, website, phone, email, founded_year, average_attendance,
   denomination_id, denomination_path, service_style, cover_photo,
-  core_beliefs, is_verified, is_active,
+  core_beliefs, size, enriched, is_verified, is_active,
   pastors(*), meeting_times(*), church_tags(*)
 `;

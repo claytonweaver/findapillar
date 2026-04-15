@@ -5,6 +5,7 @@ export interface Pastor {
   bio: string | null;
   photo_url: string | null;
   is_primary: boolean;
+  seminary: string | null;
 }
 
 export interface MeetingTime {
@@ -47,6 +48,8 @@ export interface Church {
   service_style: string | null;
   cover_photo: string | null;
   core_beliefs: CoreBeliefs | null;
+  size: 'small' | 'medium' | 'large' | null;
+  enriched: boolean;
   is_verified: boolean;
   is_active: boolean;
   pastors?: Pastor[];
