@@ -280,7 +280,7 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { city, county, state, limit = 50 } = await req.json()
+    const { city, county, state, limit = 15, offset = 0 } = await req.json()
     if (!city && !county) {
       return new Response(JSON.stringify({ error: 'city or county is required' }), {
         status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -298,7 +298,7 @@ Deno.serve(async (req) => {
 
     const withWebsites = places.filter(p => getWebsite(p.tags ?? {}))
     const withoutWebsites = places.filter(p => !getWebsite(p.tags ?? {}))
-    const toScrape = withWebsites.slice(0, limit)
+    const toScrape = withWebsites.slice(offset, offset + limit)
 
     console.log(`${withWebsites.length} with websites (scraping ${toScrape.length}), ${withoutWebsites.length} OSM-only`)
 
@@ -372,7 +372,7 @@ Deno.serve(async (req) => {
         total_found: places.length,
         scraped: scraped.length,
         osm_only: osmSaved,
-        remaining_with_websites: Math.max(0, withWebsites.length - limit),
+        remaining_with_websites: Math.max(0, withWebsites.length - offset - limit),
         errors: errors.length,
         churches: scraped,
         error_details: errors,
