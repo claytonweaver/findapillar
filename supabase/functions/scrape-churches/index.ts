@@ -10,42 +10,66 @@ const VALID_TAGS = [
   'prison-ministry', 'food-pantry', 'counseling',
 ]
 
-// ── Google Places helpers ─────────────────────────────────────────────────────
+// ── OSM helpers (no API key required) ────────────────────────────────────────
 
-async function searchChurches(location: string, apiKey: string) {
-  const query = encodeURIComponent(`churches in ${location}`)
-  const places: any[] = []
-  let pageToken: string | undefined
-
-  do {
-    const url = pageToken
-      ? `https://maps.googleapis.com/maps/api/place/textsearch/json?pagetoken=${pageToken}&key=${apiKey}`
-      : `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${query}&type=church&key=${apiKey}`
-
-    const res = await fetch(url)
-    const data = await res.json()
-
-    if (data.status !== 'OK' && data.status !== 'ZERO_RESULTS') {
-      throw new Error(`Places API error: ${data.status} — ${data.error_message ?? ''}`)
-    }
-
-    places.push(...(data.results ?? []))
-    pageToken = data.next_page_token
-
-    // Google requires a short delay before using next_page_token
-    if (pageToken) await new Promise(r => setTimeout(r, 2000))
-  } while (pageToken && places.length < 60)
-
-  return places
+/** Geocode a city/county string to a bounding box using Nominatim. */
+async function geocodeBoundingBox(location: string): Promise<[number, number, number, number]> {
+  const q = encodeURIComponent(location)
+  const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`
+  const res = await fetch(url, { headers: { 'User-Agent': 'FindAPillar/1.0 (church directory)' } })
+  const data = await res.json()
+  if (!data?.length) throw new Error(`Nominatim found no results for: ${location}`)
+  const { boundingbox } = data[0]
+  // boundingbox = [min_lat, max_lat, min_lon, max_lon]
+  return [parseFloat(boundingbox[0]), parseFloat(boundingbox[2]), parseFloat(boundingbox[1]), parseFloat(boundingbox[3])]
 }
 
-async function getPlaceDetails(placeId: string, apiKey: string) {
-  const fields = 'name,formatted_address,formatted_phone_number,website,geometry,types,url'
-  const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=${fields}&key=${apiKey}`
-  const res = await fetch(url)
+/** Query Overpass for all places of worship within a bounding box. */
+async function searchChurches(location: string): Promise<any[]> {
+  const [south, west, north, east] = await geocodeBoundingBox(location)
+  const bbox = `${south},${west},${north},${east}`
+
+  const query = `
+    [out:json][timeout:60];
+    (
+      node["amenity"="place_of_worship"]["religion"="christian"](${bbox});
+      way["amenity"="place_of_worship"]["religion"="christian"](${bbox});
+    );
+    out center tags;
+  `.trim()
+
+  const res = await fetch('https://overpass-api.de/api/interpreter', {
+    method: 'POST',
+    body: query,
+    headers: { 'Content-Type': 'text/plain', 'User-Agent': 'FindAPillar/1.0 (church directory)' },
+  })
+  if (!res.ok) throw new Error(`Overpass API error: ${res.status}`)
   const data = await res.json()
-  if (data.status !== 'OK') return null
-  return data.result
+  return data.elements ?? []
+}
+
+/** Normalize an Overpass element into a common shape for the rest of the pipeline. */
+function normalizeOsmPlace(el: any) {
+  const t = el.tags ?? {}
+  const lat = el.lat ?? el.center?.lat ?? null
+  const lng = el.lon ?? el.center?.lon ?? null
+
+  // Build address parts from OSM addr:* tags
+  const street = [t['addr:housenumber'], t['addr:street']].filter(Boolean).join(' ')
+  const city = t['addr:city'] ?? null
+  const state = t['addr:state'] ?? null
+  const zip = t['addr:postcode'] ?? null
+
+  return {
+    name: t.name ?? t['name:en'] ?? 'Unknown Church',
+    formatted_address: [street, city, state, zip].filter(Boolean).join(', '),
+    formatted_phone_number: t.phone ?? t['contact:phone'] ?? null,
+    website: t.website ?? t['contact:website'] ?? t.url ?? null,
+    denomination: t.denomination ?? t.religion ?? null,
+    geometry: { location: { lat, lng } },
+    // Pass raw OSM tags so the LLM prompt can use them
+    osm_tags: t,
+  }
 }
 
 // ── Website scraper ───────────────────────────────────────────────────────────
@@ -82,15 +106,14 @@ async function extractChurchData(
   location: string,
   anthropic: Anthropic,
 ) {
-  const addressParts = (placeDetails.formatted_address ?? '').split(',').map((s: string) => s.trim())
+  const prompt = `You are extracting structured church data for a directory. Given the source data and website text below, return a JSON object matching the schema. Only include fields you are confident about — omit uncertain ones rather than guessing.
 
-  const prompt = `You are extracting structured church data for a directory. Given the Google Places info and website text below, return a JSON object matching the schema. Only include fields you are confident about — omit uncertain ones rather than guessing.
-
-Google Places data:
+Source data:
 - Name: ${placeDetails.name}
 - Address: ${placeDetails.formatted_address}
 - Phone: ${placeDetails.formatted_phone_number ?? 'unknown'}
 - Website: ${placeDetails.website ?? 'none'}
+- OSM denomination tag: ${placeDetails.denomination ?? 'unknown'}
 
 Website text (truncated):
 ${websiteText || '(no website content available)'}
@@ -275,12 +298,10 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify({ error: 'city or county is required' }), { status: 400 })
     }
 
-    const GOOGLE_API_KEY = Deno.env.get('GOOGLE_PLACES_API_KEY')
     const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
     const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
-    if (!GOOGLE_API_KEY) return new Response(JSON.stringify({ error: 'GOOGLE_PLACES_API_KEY not set' }), { status: 500 })
     if (!ANTHROPIC_API_KEY) return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not set' }), { status: 500 })
 
     const location = county ? `${county} County, ${state ?? ''}` : `${city}, ${state ?? ''}`
@@ -288,27 +309,27 @@ Deno.serve(async (req) => {
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY })
 
     console.log(`Searching for churches in: ${location}`)
-    const places = await searchChurches(location, GOOGLE_API_KEY)
-    console.log(`Found ${places.length} places`)
+    const osmPlaces = await searchChurches(location)
+    console.log(`Found ${osmPlaces.length} places via OpenStreetMap`)
 
     const results: any[] = []
     const errors: any[] = []
 
-    for (const place of places) {
+    for (const place of osmPlaces) {
       try {
-        const details = await getPlaceDetails(place.place_id, GOOGLE_API_KEY)
-        if (!details) continue
+        const details = normalizeOsmPlace(place)
+        if (!details.name || details.name === 'Unknown Church') continue
 
         const websiteText = details.website ? await scrapeWebsite(details.website) : ''
         const extracted = await extractChurchData(details, websiteText, location, anthropic)
-        const denomResult = await findDenominationId(extracted.denomination_name, supabase)
+        const denomResult = await findDenominationId(extracted.denomination_name ?? details.denomination, supabase)
         const churchId = await upsertChurch(extracted, details, denomResult, supabase)
 
         results.push({ id: churchId, name: extracted.name, city: extracted.city })
         console.log(`✓ ${extracted.name}`)
       } catch (err: any) {
-        console.error(`✗ ${place.name}: ${err.message}`)
-        errors.push({ place: place.name, error: err.message })
+        console.error(`✗ ${place.tags?.name ?? place.id}: ${err.message}`)
+        errors.push({ place: place.tags?.name ?? String(place.id), error: err.message })
       }
     }
 
