@@ -75,23 +75,25 @@ async function main() {
     process.exit(1)
   }
 
-  console.log(`✓ Found ${data.total_found} places via OpenStreetMap (${data.with_websites} have websites)`)
-  console.log(`✓ Processed ${data.processed} churches into Supabase`)
-  if (data.skipped) console.log(`  Skipped ${data.skipped} (scrape/process errors)`)
-  if (data.remaining > 0) console.log(`  ${data.remaining} more with websites — re-run with --limit to continue\n`)
+  console.log(`✓ Found ${data.total_found} total churches via OpenStreetMap`)
+  console.log(`✓ Scraped + enriched: ${data.scraped} churches`)
+  console.log(`✓ Saved from OSM data: ${data.osm_only} churches`)
+  if (data.errors) console.log(`  Errors: ${data.errors}`)
+  if (data.remaining_with_websites > 0) console.log(`  ${data.remaining_with_websites} more with websites — re-run with --limit to continue\n`)
   else console.log()
 
   if (data.churches?.length) {
-    console.log('Churches processed:')
+    console.log('Scraped churches:')
     for (const c of data.churches) {
-      console.log(`  • ${c.name}${c.city ? ` (${c.city})` : ''} — id: ${c.id}`)
+      const extras = [c.has_photo ? 'photo' : '', c.attendance ? `att:${c.attendance}` : ''].filter(Boolean).join(', ')
+      console.log(`  • ${c.name}${c.city ? ` (${c.city})` : ''}${extras ? ` [${extras}]` : ''}`)
     }
   }
 
-  if (data.skipped_details?.length) {
-    console.log(`\nSkipped (${data.skipped_details.length}):`)
-    for (const s of data.skipped_details) {
-      console.log(`  - ${s.name}: ${s.reason}`)
+  if (data.error_details?.length) {
+    console.log(`\nErrors:`)
+    for (const e of data.error_details) {
+      console.log(`  - ${e.name}: ${e.error}`)
     }
   }
 }

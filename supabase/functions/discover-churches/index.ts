@@ -4,9 +4,10 @@
  * POST body: { city?: string, county?: string, state?: string, limit?: number }
  *
  * 1. Uses OpenStreetMap (no API key) to find churches in the area
- * 2. Scrapes each church website
- * 3. Sends to Claude to extract structured data
- * 4. Upserts into Supabase
+ * 2. Saves all churches — website or not
+ * 3. For churches with websites: scrapes + Claude extracts full details
+ * 4. For churches without websites: saves basic OSM data directly
+ * 5. Upserts everything into Supabase
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -43,7 +44,7 @@ async function getOsmAreaId(location: string): Promise<number> {
 async function findChurchesInArea(location: string): Promise<any[]> {
   const areaId = await getOsmAreaId(location)
   const query = `
-    [out:json][timeout:45][maxsize:10000000];
+    [out:json][timeout:55][maxsize:20000000];
     area(${areaId})->.loc;
     (
       node["amenity"="place_of_worship"]["religion"="christian"](area.loc);
@@ -74,39 +75,71 @@ function getWebsite(tags: Record<string, string>): string | null {
 
 // ── Scraper ───────────────────────────────────────────────────────────────────
 
-async function scrapeWebsite(url: string): Promise<string> {
+interface ScrapeResult {
+  text: string
+  coverPhoto: string | null
+}
+
+async function scrapeWebsite(url: string): Promise<ScrapeResult> {
   try {
     const res = await fetch(url, {
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(12_000),
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; FindAPillarBot/1.0)' },
     })
-    if (!res.ok) return ''
+    if (!res.ok) return { text: '', coverPhoto: null }
     const html = await res.text()
-    return html
+
+    // Extract og:image / twitter:image before stripping tags
+    const ogImage =
+      html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ??
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i)?.[1] ??
+      html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i)?.[1] ??
+      html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i)?.[1] ??
+      null
+
+    // Resolve relative URLs
+    let coverPhoto: string | null = null
+    if (ogImage) {
+      try {
+        coverPhoto = new URL(ogImage, url).href
+      } catch {
+        coverPhoto = ogImage.startsWith('http') ? ogImage : null
+      }
+    }
+
+    const text = html
       .replace(/<script[\s\S]*?<\/script>/gi, '')
       .replace(/<style[\s\S]*?<\/style>/gi, '')
       .replace(/<head[\s\S]*?<\/head>/gi, '')
+      .replace(/<(h[1-6]|p|div|section|article|li|br|tr)[^>]*>/gi, '\n')
       .replace(/<[^>]+>/g, ' ')
       .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
-      .replace(/\s{2,}/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
       .trim()
-      .slice(0, 20_000)
+      .slice(0, 25_000)
+
+    return { text, coverPhoto }
   } catch {
-    return ''
+    return { text: '', coverPhoto: null }
   }
 }
 
 // ── LLM extraction ────────────────────────────────────────────────────────────
 
-async function extractChurchData(name: string, address: string, phone: string | null, website: string, osmDenomination: string | null, websiteText: string, anthropic: Anthropic) {
+async function extractChurchData(
+  name: string, address: string, phone: string | null,
+  website: string, osmDenomination: string | null,
+  websiteText: string, anthropic: Anthropic
+) {
   const msg = await anthropic.messages.create({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 2048,
+    max_tokens: 3000,
     messages: [{
       role: 'user',
-      content: `Extract structured church data from the info below and return ONLY valid JSON. Omit fields you are not confident about rather than guessing.
+      content: `You are extracting church directory data. Be thorough — look carefully through the entire text for every piece of information. Return ONLY valid JSON, no markdown fences.
 
-Source:
+Source info:
 - Name: ${name}
 - Address: ${address}
 - Phone: ${phone ?? 'unknown'}
@@ -114,29 +147,40 @@ Source:
 - OSM denomination tag: ${osmDenomination ?? 'unknown'}
 
 Website text:
-${websiteText || '(none)'}
+${websiteText || '(no website content available)'}
 
-Return JSON with these fields (all optional except name):
+Extract the following (omit fields you cannot find — do NOT guess):
 {
   "name": string,
-  "description": string | null,
+  "description": string | null,          // 2-4 sentences summarizing the church's identity/mission
   "street_address": string | null,
   "city": string | null,
-  "state": string | null,
+  "state": string | null,                 // 2-letter code
   "zip": string | null,
   "phone": string | null,
   "email": string | null,
   "founded_year": number | null,
-  "average_attendance": number | null,
-  "denomination_name": string | null,
+  "average_attendance": number | null,    // Look for any mention: "congregation of X", "X members", "X people weekly", "X attend", "X families". Give a number if found.
+  "denomination_name": string | null,     // Full official name e.g. "United Methodist Church", "Southern Baptist Convention"
   "service_style": "traditional"|"contemporary"|"blended"|"liturgical"|null,
-  "core_beliefs": { "statement": string, "beliefs": string[] } | null,
-  "tags": string[],
-  "pastors": [{ "name": string, "title": string|null, "bio": string|null, "is_primary": boolean }],
-  "meeting_times": [{ "day_of_week": number, "start_time": "HH:MM:SS", "end_time": string|null, "service_name": string|null }]
-}
-
-Valid tags (only use these): ${VALID_TAGS.join(', ')}`,
+  "core_beliefs": {
+    "statement": string,                  // Doctrinal/mission statement if present
+    "beliefs": string[]                   // Key theological positions, 3-8 bullet points
+  } | null,
+  "tags": string[],                       // ONLY from this list: ${VALID_TAGS.join(', ')}
+  "pastors": [{
+    "name": string,
+    "title": string | null,               // e.g. "Senior Pastor", "Lead Pastor", "Rector"
+    "bio": string | null,                 // Brief bio if available
+    "is_primary": boolean
+  }],
+  "meeting_times": [{
+    "day_of_week": number,                // 0=Sunday, 1=Monday, 6=Saturday
+    "start_time": "HH:MM:SS",
+    "end_time": string | null,
+    "service_name": string | null         // e.g. "Traditional Service", "Contemporary Worship"
+  }]
+}`,
     }],
   })
 
@@ -167,12 +211,19 @@ async function findDenomination(name: string | null, supabase: any) {
   return { id: data.id, path }
 }
 
+// ── Slug ──────────────────────────────────────────────────────────────────────
+
+function toSlug(name: string, city: string | null): string {
+  return `${name}-${city ?? ''}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+}
+
 // ── Upsert ────────────────────────────────────────────────────────────────────
 
-async function upsertChurch(extracted: any, lat: number | null, lng: number | null, website: string, denomResult: any, supabase: any) {
-  const slug = `${extracted.name}-${extracted.city ?? ''}`
-    .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-
+async function upsertChurch(
+  extracted: any, lat: number | null, lng: number | null,
+  website: string | null, coverPhoto: string | null,
+  denomResult: any, supabase: any
+) {
   const serviceStyle = ['traditional', 'contemporary', 'blended', 'liturgical'].includes(extracted.service_style)
     ? extracted.service_style : null
 
@@ -180,7 +231,7 @@ async function upsertChurch(extracted: any, lat: number | null, lng: number | nu
     .from('churches')
     .upsert({
       name: extracted.name,
-      slug,
+      slug: toSlug(extracted.name, extracted.city),
       description: extracted.description ?? null,
       street_address: extracted.street_address ?? null,
       city: extracted.city ?? null,
@@ -195,6 +246,7 @@ async function upsertChurch(extracted: any, lat: number | null, lng: number | nu
       denomination_id: denomResult.id,
       denomination_path: denomResult.path,
       service_style: serviceStyle,
+      cover_photo: coverPhoto,
       core_beliefs: extracted.core_beliefs ?? null,
       is_verified: false,
       is_active: true,
@@ -228,9 +280,11 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
   try {
-    const { city, county, state, limit = 10 } = await req.json()
+    const { city, county, state, limit = 50 } = await req.json()
     if (!city && !county) {
-      return new Response(JSON.stringify({ error: 'city or county is required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+      return new Response(JSON.stringify({ error: 'city or county is required' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
     }
 
     const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
@@ -240,45 +294,95 @@ Deno.serve(async (req) => {
     console.log(`Discovering churches in: ${location}`)
 
     const places = await findChurchesInArea(location)
-    console.log(`OSM: ${places.length} places`)
+    console.log(`OSM: ${places.length} total places`)
 
     const withWebsites = places.filter(p => getWebsite(p.tags ?? {}))
-    const toProcess = withWebsites.slice(0, limit)
-    console.log(`${withWebsites.length} have websites, processing ${toProcess.length}`)
+    const withoutWebsites = places.filter(p => !getWebsite(p.tags ?? {}))
+    const toScrape = withWebsites.slice(0, limit)
 
-    const results: any[] = []
+    console.log(`${withWebsites.length} with websites (scraping ${toScrape.length}), ${withoutWebsites.length} OSM-only`)
+
+    const scraped: any[] = []
+    const osmOnly: any[] = []
     const errors: any[] = []
 
-    for (const place of toProcess) {
+    // ── Churches with websites: full scrape + LLM ──
+    for (const place of toScrape) {
       const tags = place.tags ?? {}
       const name = tags['name'] ?? tags['name:en'] ?? 'Unknown Church'
       try {
         const website = getWebsite(tags)!
         const lat = place.lat ?? place.center?.lat ?? null
         const lng = place.lon ?? place.center?.lon ?? null
-
         const street = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ')
         const address = [street, tags['addr:city'], tags['addr:state'], tags['addr:postcode']].filter(Boolean).join(', ') || location
 
-        const websiteText = await scrapeWebsite(website)
-        const extracted = await extractChurchData(name, address, tags['phone'] ?? tags['contact:phone'] ?? null, website, tags['denomination'] ?? null, websiteText, anthropic)
-        const denomResult = await findDenomination(extracted.denomination_name ?? tags['denomination'] ?? null, supabase)
-        const churchId = await upsertChurch(extracted, lat, lng, website, denomResult, supabase)
+        const { text, coverPhoto } = await scrapeWebsite(website)
+        const extracted = await extractChurchData(
+          name, address, tags['phone'] ?? tags['contact:phone'] ?? null,
+          website, tags['denomination'] ?? null, text, anthropic
+        )
+        const denomResult = await findDenomination(
+          extracted.denomination_name ?? tags['denomination'] ?? null, supabase
+        )
+        const churchId = await upsertChurch(extracted, lat, lng, website, coverPhoto, denomResult, supabase)
 
-        results.push({ id: churchId, name: extracted.name, city: extracted.city })
-        console.log(`✓ ${extracted.name}`)
+        scraped.push({ id: churchId, name: extracted.name, city: extracted.city, has_photo: !!coverPhoto, attendance: extracted.average_attendance })
+        console.log(`✓ ${extracted.name}${coverPhoto ? ' [photo]' : ''}${extracted.average_attendance ? ` [att: ${extracted.average_attendance}]` : ''}`)
       } catch (err: any) {
         console.error(`✗ ${name}: ${err.message}`)
         errors.push({ name, error: err.message })
       }
     }
 
+    // ── Churches without websites: batch upsert basic OSM data ──
+    const osmRows = withoutWebsites
+      .filter(p => p.tags?.name)
+      .map((place: any) => {
+        const tags = place.tags ?? {}
+        const name = tags['name'] ?? tags['name:en']
+        const city = tags['addr:city'] ?? null
+        return {
+          name,
+          slug: toSlug(name, city),
+          street_address: [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' ') || null,
+          city,
+          state: tags['addr:state'] ?? null,
+          zip: tags['addr:postcode'] ?? null,
+          lat: place.lat ?? place.center?.lat ?? null,
+          lng: place.lon ?? place.center?.lon ?? null,
+          phone: tags['phone'] ?? tags['contact:phone'] ?? null,
+          is_verified: false,
+          is_active: true,
+        }
+      })
+
+    let osmSaved = 0
+    // Batch in chunks of 100 to stay within limits
+    for (let i = 0; i < osmRows.length; i += 100) {
+      const chunk = osmRows.slice(i, i + 100)
+      const { error } = await supabase.from('churches').upsert(chunk, { onConflict: 'slug', ignoreDuplicates: true })
+      if (!error) osmSaved += chunk.length
+    }
+    console.log(`Saved ${osmSaved} OSM-only churches`)
+
     return new Response(
-      JSON.stringify({ location, total_found: places.length, with_websites: withWebsites.length, processed: results.length, remaining: Math.max(0, withWebsites.length - limit), churches: results, errors }),
+      JSON.stringify({
+        location,
+        total_found: places.length,
+        scraped: scraped.length,
+        osm_only: osmSaved,
+        remaining_with_websites: Math.max(0, withWebsites.length - limit),
+        errors: errors.length,
+        churches: scraped,
+        error_details: errors,
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (err: any) {
     console.error(err)
-    return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    })
   }
 })
