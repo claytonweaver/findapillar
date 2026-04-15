@@ -33,8 +33,8 @@ if (!city && !county) {
   process.exit(1)
 }
 
-const LOCAL_URL = 'http://localhost:54321/functions/v1/scrape-churches'
-const REMOTE_URL = `${process.env['SUPABASE_URL']}/functions/v1/scrape-churches`
+const LOCAL_URL = 'http://localhost:54321/functions/v1/discover-churches'
+const REMOTE_URL = `${process.env['SUPABASE_URL']}/functions/v1/discover-churches`
 
 const url = remote ? REMOTE_URL : LOCAL_URL
 
@@ -74,19 +74,20 @@ if (data.error) {
   process.exit(1)
 }
 
-console.log(`✓ Found ${data.total_found} places in Google Maps`)
-console.log(`✓ Inserted/updated ${data.inserted} churches in Supabase\n`)
+console.log(`✓ Found ${data.total_found} places via OpenStreetMap`)
+console.log(`✓ Processed ${data.processed} churches into Supabase`)
+console.log(`  Skipped ${data.skipped} (no website or scrape error)\n`)
 
 if (data.churches?.length) {
   console.log('Churches processed:')
   for (const c of data.churches) {
-    console.log(`  • ${c.name} (${c.city}) — id: ${c.id}`)
+    console.log(`  • ${c.name} — ${c.url}`)
   }
 }
 
-if (data.errors?.length) {
-  console.log(`\nErrors (${data.errors.length}):`)
-  for (const e of data.errors) {
-    console.log(`  ✗ ${e.place}: ${e.error}`)
+if (data.skipped_details?.length) {
+  console.log(`\nSkipped (${data.skipped_details.length}):`)
+  for (const s of data.skipped_details) {
+    console.log(`  - ${s.name}: ${s.reason}`)
   }
 }
