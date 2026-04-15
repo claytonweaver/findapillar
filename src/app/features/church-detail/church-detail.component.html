@@ -1,0 +1,187 @@
+<!-- Top nav -->
+<header class="detail-header">
+  <a routerLink="/" class="back-link">
+    <span class="pi pi-arrow-left"></span>
+    Back to search
+  </a>
+  <div class="flex-1"></div>
+  <a routerLink="/" class="detail-logo">
+    <div class="detail-logo__icon">
+      <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="2" y="4" width="24" height="3" rx="0.5" fill="white"/>
+        <rect x="5" y="7" width="5" height="13" rx="0.5" fill="white"/>
+        <rect x="18" y="7" width="5" height="13" rx="0.5" fill="white"/>
+        <rect x="2" y="20" width="24" height="3" rx="0.5" fill="#FBBF24"/>
+      </svg>
+    </div>
+    <span class="detail-logo__name">FindAPillar</span>
+  </a>
+</header>
+
+<!-- Loading state -->
+<div *ngIf="loading" class="detail-page">
+  <div class="detail-hero-skeleton">
+    <p-skeleton width="100%" height="100%" borderRadius="1.25rem" />
+  </div>
+  <div class="detail-main">
+    <div class="detail-content">
+      <p-skeleton width="20%" height="12px" styleClass="mb-3" />
+      <p-skeleton width="60%" height="2.5rem" styleClass="mb-3" />
+      <p-skeleton width="80%" height="14px" styleClass="mb-2" />
+      <p-skeleton width="70%" height="14px" />
+    </div>
+  </div>
+</div>
+
+<!-- Not found -->
+<div *ngIf="!loading && !church" class="detail-page not-found">
+  <p>Church not found.</p>
+  <a routerLink="/">← Back to search</a>
+</div>
+
+<!-- Church detail -->
+<main *ngIf="!loading && church" class="detail-page">
+
+  <!-- Hero -->
+  <div class="detail-hero">
+    <img *ngIf="church.cover_photo" [src]="church.cover_photo" [alt]="church.name" />
+    <div *ngIf="!church.cover_photo" class="detail-hero__placeholder">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+          d="M3 21V7l9-4 9 4v14M9 21V11h6v10" />
+      </svg>
+    </div>
+  </div>
+
+  <div class="detail-main">
+
+    <!-- Left column -->
+    <div class="detail-content">
+
+      <!-- Name + basics -->
+      <div class="church-intro">
+        <p *ngIf="denomLabel" class="church-intro__denom">{{ denomLabel }}</p>
+        <div class="church-intro__heading">
+          <h1 class="church-intro__name">{{ church.name }}</h1>
+          <svg *ngIf="church.is_verified" class="church-intro__verified" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd"/>
+          </svg>
+        </div>
+        <p *ngIf="church.denomination_path?.length" class="church-intro__path">
+          {{ church.denomination_path!.join(' › ') }}
+        </p>
+        <div class="church-intro__meta">
+          <span *ngIf="church.street_address">
+            <span class="pi pi-map-marker"></span>
+            {{ church.street_address }}, {{ church.city }}, {{ church.state }} {{ church.zip }}
+          </span>
+          <span *ngIf="church.average_attendance">
+            <span class="pi pi-users"></span>
+            ~{{ church.average_attendance.toLocaleString() }} avg. attendance
+          </span>
+          <span *ngIf="church.founded_year">
+            <span class="pi pi-calendar"></span>
+            Est. {{ church.founded_year }}
+          </span>
+          <span *ngIf="church.service_style" class="church-intro__style">
+            {{ church.service_style | titlecase }} worship
+          </span>
+        </div>
+      </div>
+
+      <p-divider />
+
+      <!-- About -->
+      <section *ngIf="church.description" class="detail-section">
+        <h2 class="detail-section__title">About</h2>
+        <p class="detail-section__body">{{ church.description }}</p>
+      </section>
+
+      <!-- Core beliefs -->
+      <section *ngIf="church.core_beliefs" class="detail-section">
+        <h2 class="detail-section__title">Core Beliefs</h2>
+        <blockquote class="beliefs-quote">{{ church.core_beliefs.statement }}</blockquote>
+        <ul class="beliefs-list">
+          <li *ngFor="let b of church.core_beliefs.beliefs" class="beliefs-list__item">
+            <span class="beliefs-list__dot"></span>{{ b }}
+          </li>
+        </ul>
+      </section>
+
+      <!-- Features / Tags -->
+      <section *ngIf="church.church_tags?.length" class="detail-section">
+        <h2 class="detail-section__title">Features</h2>
+        <div class="tag-cloud">
+          <span *ngFor="let t of church.church_tags" class="tag-pill">{{ t.tag }}</span>
+        </div>
+      </section>
+
+      <!-- Leadership -->
+      <section *ngIf="church.pastors?.length" class="detail-section">
+        <h2 class="detail-section__title">Leadership</h2>
+        <div class="pastors-list">
+          <div *ngFor="let pastor of [primaryPastor, ...otherPastors]" class="pastor-card">
+            <div class="pastor-card__avatar">
+              <img *ngIf="pastor?.photo_url; else initials" [src]="pastor!.photo_url!" [alt]="pastor!.name" />
+              <ng-template #initials>
+                <span class="pastor-card__initial">{{ pastor!.name[0] }}</span>
+              </ng-template>
+            </div>
+            <div class="pastor-card__info">
+              <p class="pastor-card__name">{{ pastor!.name }}</p>
+              <p class="pastor-card__title">{{ pastor!.title }}</p>
+              <p *ngIf="pastor!.bio" class="pastor-card__bio">{{ pastor!.bio }}</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Right sidebar -->
+    <aside class="detail-sidebar">
+
+      <!-- Service times -->
+      <div class="sidebar-card">
+        <h3 class="sidebar-card__title">
+          <span class="pi pi-clock"></span> Service Times
+        </h3>
+        <div *ngIf="sortedDays.length; else noTimes" class="service-times">
+          <div *ngFor="let day of sortedDays" class="service-day">
+            <p class="service-day__name">{{ DAY_NAMES[day] }}</p>
+            <div *ngFor="let mt of meetingsForDay(day)" class="service-time">
+              <span class="service-time__name">{{ mt.service_name || 'Service' }}</span>
+              <span class="service-time__hour">{{ formatTime(mt.start_time) }}</span>
+            </div>
+          </div>
+        </div>
+        <ng-template #noTimes><p class="sidebar-card__empty">No times listed</p></ng-template>
+      </div>
+
+      <!-- Contact -->
+      <div class="sidebar-card">
+        <h3 class="sidebar-card__title">Contact</h3>
+        <div class="contact-list">
+          <a *ngIf="church.website" [href]="church.website" target="_blank" rel="noopener" class="contact-item contact-item--link">
+            <span class="pi pi-globe"></span>
+            <span class="contact-item__text">{{ stripProtocol(church.website) }}</span>
+          </a>
+          <a *ngIf="church.phone" [href]="'tel:' + church.phone" class="contact-item">
+            <span class="pi pi-phone"></span>
+            <span>{{ church.phone }}</span>
+          </a>
+          <a *ngIf="church.street_address" [href]="mapsUrl" target="_blank" rel="noopener" class="contact-item">
+            <span class="pi pi-map-marker"></span>
+            <span>{{ church.street_address }}<br/>{{ church.city }}, {{ church.state }} {{ church.zip }}</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Google Maps -->
+      <a *ngIf="church.lat && church.lng" [href]="mapsUrl" target="_blank" rel="noopener" class="maps-btn">
+        <span class="pi pi-map-marker"></span>
+        Open in Google Maps
+      </a>
+
+    </aside>
+  </div>
+</main>

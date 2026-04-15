@@ -1,0 +1,146 @@
+<!-- ══ HEADER ════════════════════════════════════════════════════ -->
+<header class="site-header">
+  <div class="site-header__inner">
+
+    <!-- Logo -->
+    <a routerLink="/" class="logo">
+      <div class="logo__icon">
+        <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="4" width="24" height="3" rx="0.5" fill="white"/>
+          <rect x="5" y="7" width="5" height="13" rx="0.5" fill="white"/>
+          <rect x="18" y="7" width="5" height="13" rx="0.5" fill="white"/>
+          <rect x="2" y="20" width="24" height="3" rx="0.5" fill="#FBBF24"/>
+        </svg>
+      </div>
+      <span class="logo__name">FindAPillar</span>
+    </a>
+
+    <!-- Search -->
+    <div class="search-wrap">
+      <span class="search-wrap__icon pi pi-search"></span>
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Search by name, city, or denomination…"
+        [(ngModel)]="searchQuery"
+        (ngModelChange)="onSearchChange($event)"
+      />
+      <button *ngIf="searchQuery" class="search-wrap__clear" (click)="clearSearch()">
+        <span class="pi pi-times"></span>
+      </button>
+    </div>
+
+    <!-- Filters button -->
+    <button class="header-btn" [class.header-btn--active]="hasActiveFilters" (click)="openFilters()">
+      <span class="pi pi-sliders-h"></span>
+      <span class="header-btn__label">Filters</span>
+      <span *ngIf="activeFilterCount > 0" class="header-btn__badge">{{ activeFilterCount }}</span>
+    </button>
+
+    <!-- Map toggle -->
+    <button class="header-btn" [class.header-btn--on]="showMap" (click)="showMap = !showMap">
+      <span class="pi pi-map"></span>
+      <span class="header-btn__label">{{ showMap ? 'Hide map' : 'Map' }}</span>
+    </button>
+
+  </div>
+
+  <!-- Active filter pills row -->
+  <div *ngIf="hasActiveFilters" class="filter-pills">
+    <span *ngFor="let id of filters.denominationIds" class="filter-pill">
+      {{ getDenomName(id) }}
+      <button (click)="removeFilterDenom(id)" class="filter-pill__x pi pi-times"></button>
+    </span>
+    <span *ngFor="let s of filters.serviceStyles" class="filter-pill">
+      {{ s | titlecase }}
+      <button (click)="removeServiceStyle(s)" class="filter-pill__x pi pi-times"></button>
+    </span>
+    <span *ngFor="let tag of filters.tags" class="filter-pill">
+      {{ tag }}
+      <button (click)="removeTag(tag)" class="filter-pill__x pi pi-times"></button>
+    </span>
+    <span *ngIf="filters.state" class="filter-pill">
+      {{ filters.state }}
+      <button (click)="clearState()" class="filter-pill__x pi pi-times"></button>
+    </span>
+    <button class="filter-pill-clear" (click)="clearAll()">Clear all</button>
+  </div>
+</header>
+
+<!-- ══ BODY ══════════════════════════════════════════════════════ -->
+<div class="page-body">
+
+  <!-- List panel -->
+  <div class="list-panel" [class.list-panel--full]="!showMap" #listPanel>
+
+    <!-- Count bar -->
+    <div class="count-bar">
+      <span class="count-bar__label">
+        {{ loading ? '…' : displayChurches.length + ' church' + (displayChurches.length !== 1 ? 'es' : '') }}
+        <span *ngIf="drawPolygon" style="font-weight:400;opacity:0.7"> in drawn area</span>
+      </span>
+      <button *ngIf="selectedId" class="count-bar__clear" (click)="clearSelection()">
+        <span class="pi pi-times" style="font-size:11px"></span> Clear selection
+      </button>
+    </div>
+
+    <!-- Cards -->
+    <div class="cards-list">
+      <!-- Loading skeletons -->
+      <ng-container *ngIf="loading">
+        <div *ngFor="let _ of skeletons" class="skeleton-card">
+          <p-skeleton width="108px" height="108px" borderRadius="0.75rem" />
+          <div class="skeleton-card__body">
+            <p-skeleton width="30%" height="10px" styleClass="mb-2" />
+            <p-skeleton width="75%" height="16px" styleClass="mb-2" />
+            <p-skeleton width="50%" height="12px" styleClass="mb-2" />
+            <p-skeleton width="65%" height="12px" />
+          </div>
+        </div>
+      </ng-container>
+
+      <!-- Empty state -->
+      <div *ngIf="!loading && displayChurches.length === 0" class="empty-state">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+            d="M3 21V7l9-4 9 4v14M9 21V11h6v10" />
+        </svg>
+        <p class="empty-state__title">No churches found</p>
+        <p class="empty-state__sub">Try adjusting your search or filters</p>
+        <button class="empty-state__btn" (click)="clearAll()">Clear search</button>
+      </div>
+
+      <!-- Church cards -->
+      <ng-container *ngIf="!loading">
+        <div
+          *ngFor="let church of displayChurches; trackBy: trackById"
+          class="card-wrapper"
+          [attr.data-church-id]="church.id"
+        >
+          <app-church-card
+            [church]="church"
+            [isSelected]="selectedId === church.id"
+            [isHovered]="hoveredId === church.id"
+            (hovered)="onCardHover($event)"
+            (selected)="onCardSelect($event)"
+          />
+        </div>
+      </ng-container>
+    </div>
+  </div>
+
+  <!-- Map panel -->
+  <div *ngIf="showMap" class="map-panel">
+    <app-church-map
+      [churches]="mappableChurches"
+      [hoveredChurchId]="hoveredId"
+      [selectedChurchId]="selectedId"
+      (selectChurch)="onMapSelect($event)"
+      (polygonFilter)="onPolygonFilter($event)"
+    />
+  </div>
+
+</div>
+
+<!-- Filter sidebar -->
+<app-filter-sidebar />

@@ -1,0 +1,100 @@
+@import "primeicons/primeicons.css";
+
+/* ── Sanctuary Design System ─────────────────────────────── */
+:root {
+  --sanctuary-bg:        #F8F6F1;
+  --sanctuary-surface:   #FFFFFF;
+  --sanctuary-border:    #E8E4DE;
+  --sanctuary-text:      #1C1917;
+  --sanctuary-muted:     #78716C;
+  --sanctuary-accent:    #9A3412;
+  --sanctuary-accent-bg: #FEF3E9;
+  --sanctuary-gold:      #B45309;
+  --sanctuary-radius-sm: 0.5rem;
+  --sanctuary-radius:    1rem;
+  --sanctuary-radius-lg: 1.25rem;
+  --sanctuary-shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+  --sanctuary-shadow:    0 4px 12px rgba(0,0,0,0.08);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background: var(--sanctuary-bg);
+  color: var(--sanctuary-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Typography ──────────────────────────────────────────── */
+.serif { font-family: 'Georgia', 'Times New Roman', serif; }
+
+/* ── PrimeNG overrides for Sanctuary feel ─────────────────── */
+.p-button {
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.p-button-outlined {
+  border-color: var(--sanctuary-border) !important;
+  color: var(--sanctuary-text) !important;
+  background: var(--sanctuary-surface) !important;
+  &:hover {
+    background: var(--sanctuary-bg) !important;
+    border-color: #c4bdb6 !important;
+  }
+}
+
+.p-inputtext {
+  background: var(--sanctuary-bg) !important;
+  border-color: var(--sanctuary-border) !important;
+  color: var(--sanctuary-text) !important;
+  &::placeholder { color: #a8a29e; }
+  &:focus { border-color: var(--sanctuary-accent) !important; box-shadow: 0 0 0 3px rgba(154,52,18,0.12) !important; }
+}
+
+.p-drawer .p-drawer-content { padding: 0 !important; }
+.p-drawer-header { padding: 1.25rem 1.5rem !important; border-bottom: 1px solid var(--sanctuary-border); }
+
+.p-select { background: var(--sanctuary-bg) !important; border-color: var(--sanctuary-border) !important; }
+.p-multiselect { background: var(--sanctuary-bg) !important; border-color: var(--sanctuary-border) !important; }
+.p-chip { background: #F5F3EF !important; color: var(--sanctuary-text) !important; border: 1px solid var(--sanctuary-border) !important; }
+
+/* Skeleton shimmer */
+.p-skeleton { background: linear-gradient(90deg, #ede9e3 25%, #f5f2ec 50%, #ede9e3 75%); background-size: 200% 100%; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c4bdb6; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #a8a29e; }
+
+/* Leaflet container inside Angular */
+.leaflet-container { font-family: inherit !important; background: #f0ebe3 !important; }
+.leaflet-marker-icon { overflow: visible !important; }
+
+/* church map pins */
+.cmap-pin {
+  background: white;
+  border: 1.5px solid #a8a29e;
+  border-radius: 20px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1c1917;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  cursor: pointer;
+  transition: transform 0.12s, background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  font-family: system-ui, sans-serif;
+}
+.cmap-pin--hovered {
+  background: #1c1917; color: white; border-color: #1c1917;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.22); transform: scale(1.08); z-index: 900 !important;
+}
+.cmap-pin--selected {
+  background: #9A3412; color: white; border-color: #9A3412;
+  box-shadow: 0 4px 14px rgba(154,52,18,0.35); transform: scale(1.15); z-index: 1000 !important;
+}
