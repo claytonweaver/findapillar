@@ -91,7 +91,9 @@ Deno.serve(async (req) => {
       ],
     })
 
-    const rawJson = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
+    const rawText = message.content[0].type === 'text' ? message.content[0].text.trim() : ''
+    // Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+    const rawJson = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
 
     let extracted: Record<string, unknown>
     try {
