@@ -43,3 +43,7 @@ __screenshots__/
 .DS_Store
 Thumbs.db
 .vercel
+
+# Secrets
+scripts/.env
+supabase/functions/.env
