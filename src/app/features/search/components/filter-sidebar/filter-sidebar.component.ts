@@ -15,6 +15,14 @@ import { ChurchSearchService } from '../../../../core/services/church-search.ser
 import { ChurchFilters, DEFAULT_FILTERS, SERVICE_STYLE_OPTIONS, TAG_OPTIONS, activeFilterCount } from '../../../../core/models/filter.model';
 import { Denomination } from '../../../../core/models/denomination.model';
 
+/**
+ * Denominations that have no churches with denomination_id set but ARE tracked via tags.
+ * Selecting one of these from the Tradition picker toggles the equivalent tag instead.
+ */
+const DENOM_NAME_TAG_MAP: Record<string, string> = {
+  'Reformed': 'reformed',
+};
+
 // Walk up the tree to find the level-2 ancestor (the "family") of a denomination
 function getFamily(flat: Denomination[], id: string): string | null {
   let node = flat.find(d => d.id === id);
@@ -191,6 +199,8 @@ export class FilterSidebarComponent implements OnInit, OnDestroy {
   draft: ChurchFilters = { ...DEFAULT_FILTERS };
   allDenominations: Denomination[] = [];
   denominationOptions: Denomination[] = [];
+  /** denomination id → tag value, for denominations backed by tags not denomination_id */
+  private denomIdToTag = new Map<string, string>();
   serviceStyleOptions = SERVICE_STYLE_OPTIONS;
   tagOptions = TAG_OPTIONS;
   resultCount = 0;
@@ -225,6 +235,11 @@ export class FilterSidebarComponent implements OnInit, OnDestroy {
       .subscribe(denoms => {
         this.allDenominations = denoms;
         this.denominationOptions = denoms.filter(d => d.level === 2 || d.level === 3);
+        this.denomIdToTag.clear();
+        for (const d of denoms) {
+          const tagValue = DENOM_NAME_TAG_MAP[d.name];
+          if (tagValue) this.denomIdToTag.set(d.id, tagValue);
+        }
       });
 
     // Keep draft in sync with applied filters when drawer opens
@@ -243,10 +258,16 @@ export class FilterSidebarComponent implements OnInit, OnDestroy {
   open(): void { this.visible = true; this.cdr.markForCheck(); }
 
   isDenomSelected(id: string): boolean {
-    return this.draft.denominationIds.includes(id);
+    const tag = this.denomIdToTag.get(id);
+    return tag ? this.draft.tags.includes(tag) : this.draft.denominationIds.includes(id);
   }
 
   toggleDenom(id: string): void {
+    const tag = this.denomIdToTag.get(id);
+    if (tag) {
+      this.toggleTag(tag);
+      return;
+    }
     const ids = this.draft.denominationIds;
     this.draft = {
       ...this.draft,

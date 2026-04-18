@@ -592,7 +592,7 @@ export class ChurchMapComponent implements AfterViewInit, OnChanges, OnDestroy {
   }
 
   private toAcronym(name: string): string {
-    const skip = /^(the|of|and|in|at|for|a|an|de|la|church|chapel|fellowship)$/i;
+    const skip = /^(the|of|and|in|at|for|a|an|de|la)$/i;
     return name.split(/\s+/)
       .filter(w => w.length > 1 && !skip.test(w))
       .map(w => w[0].toUpperCase())

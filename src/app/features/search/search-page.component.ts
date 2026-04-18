@@ -4,8 +4,8 @@ import {
 } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterModule } from '@angular/router';
-import { Subject, takeUntil, debounceTime, distinctUntilChanged } from 'rxjs';
+import { RouterModule, ActivatedRoute } from '@angular/router';
+import { Subject, takeUntil, debounceTime, distinctUntilChanged, take } from 'rxjs';
 import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
 import { SkeletonModule } from 'primeng/skeleton';
@@ -17,7 +17,7 @@ import { ChurchSearchService } from '../../core/services/church-search.service';
 import { FilterService } from '../../core/services/filter.service';
 import { DenominationService } from '../../core/services/denomination.service';
 import { Church } from '../../core/models/church.model';
-import { ChurchFilters, activeFilterCount } from '../../core/models/filter.model';
+import { ChurchFilters, activeFilterCount, DEFAULT_FILTERS } from '../../core/models/filter.model';
 import { ChurchCardComponent } from './components/church-card/church-card.component';
 import { FilterSidebarComponent } from './components/filter-sidebar/filter-sidebar.component';
 import { ChurchMapComponent } from './components/church-map/church-map.component';
@@ -57,9 +57,26 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     private readonly filterService: FilterService,
     private readonly denominationService: DenominationService,
     private readonly cdr: ChangeDetectorRef,
+    private readonly route: ActivatedRoute,
   ) {}
 
   ngOnInit(): void {
+    // Apply location from query params (e.g. navigated from home page)
+    this.route.queryParams.pipe(take(1)).subscribe(params => {
+      if (params['city'] || params['state']) {
+        this.filterService.setFilters({
+          ...DEFAULT_FILTERS,
+          city: params['city'] ?? '',
+          state: params['state'] ?? '',
+        });
+      } else if (params['location']) {
+        this.filterService.setFilters({
+          ...DEFAULT_FILTERS,
+          ...parseLocation(params['location']),
+        });
+      }
+    });
+
     // Loading indicator
     this.searchService.loading$
       .pipe(takeUntil(this.destroy$))
@@ -94,6 +111,17 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { this.destroy$.next(); this.destroy$.complete(); }
 
   onSearchChange(value: string): void {
+    const cityState = parseCityState(value);
+    if (cityState) {
+      this.searchQuery = value;
+      this.filterService.setFilters({
+        ...this.filterService.current,
+        city: cityState.city,
+        state: cityState.state,
+        searchQuery: '',
+      });
+      return;
+    }
     this.searchInput$.next(value);
   }
 
@@ -101,6 +129,8 @@ export class SearchPageComponent implements OnInit, OnDestroy {
     this.searchQuery = '';
     this.filterService.patchFilter('searchQuery', '');
   }
+
+  clearCity(): void { this.filterService.patchFilter('city', ''); }
 
   openFilters(): void {
     this.filterSidebar.open();
@@ -122,6 +152,11 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   clearState(): void { this.filterService.patchFilter('state', ''); }
 
   clearAll(): void { this.filterService.reset(); this.searchQuery = ''; }
+
+  get cityStateLabel(): string {
+    if (this.filters?.city && this.filters?.state) return `${this.filters.city}, ${this.filters.state}`;
+    return this.filters?.city ?? '';
+  }
 
   get activeFilterCount(): number { return activeFilterCount(this.filters ?? {}  as ChurchFilters); }
 
@@ -176,6 +211,58 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   skeletons = Array(5);
   trackById = (_: number, c: Church) => c.id;
   get displayChurches(): Church[] { return this.drawPolygon ? this.filteredChurches : this.churches; }
+}
+
+const STATE_NAMES: Record<string, string> = {
+  alabama:'AL',alaska:'AK',arizona:'AZ',arkansas:'AR',california:'CA',
+  colorado:'CO',connecticut:'CT',delaware:'DE',florida:'FL',georgia:'GA',
+  hawaii:'HI',idaho:'ID',illinois:'IL',indiana:'IN',iowa:'IA',kansas:'KS',
+  kentucky:'KY',louisiana:'LA',maine:'ME',maryland:'MD',massachusetts:'MA',
+  michigan:'MI',minnesota:'MN',mississippi:'MS',missouri:'MO',montana:'MT',
+  nebraska:'NE',nevada:'NV','new hampshire':'NH','new jersey':'NJ',
+  'new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND',
+  ohio:'OH',oklahoma:'OK',oregon:'OR',pennsylvania:'PA','rhode island':'RI',
+  'south carolina':'SC','south dakota':'SD',tennessee:'TN',texas:'TX',
+  utah:'UT',vermont:'VT',virginia:'VA',washington:'WA','west virginia':'WV',
+  wisconsin:'WI',wyoming:'WY',
+};
+
+function parseCityState(input: string): { city: string; state: string } | null {
+  const trimmed = input.trim();
+  const match = trimmed.match(/^([a-zA-Z\s]+?),?\s+([a-zA-Z]{2})$/);
+  if (!match) return null;
+  const stateAbbr = match[2].toUpperCase();
+  const validStates = new Set(Object.values(STATE_NAMES));
+  if (!validStates.has(stateAbbr)) return null;
+  return { city: match[1].trim(), state: stateAbbr };
+}
+
+function parseLocation(raw: string): Partial<{ state: string; searchQuery: string }> {
+  const trimmed = raw.trim();
+  // "Detroit, MI" or "Wayne County, MI" or "Detroit, Michigan"
+  const commaMatch = trimmed.match(/^(.+),\s*([A-Za-z\s]+)$/);
+  if (commaMatch) {
+    const regionRaw = commaMatch[1].trim();
+    const stateRaw = commaMatch[2].trim();
+    const stateAbbr = stateRaw.length === 2
+      ? stateRaw.toUpperCase()
+      : STATE_NAMES[stateRaw.toLowerCase()];
+    if (stateAbbr) {
+      // County-level input — don't put "Wayne County" in the search box
+      const isCounty = /county/i.test(regionRaw);
+      return { state: stateAbbr, ...(isCounty ? {} : { searchQuery: regionRaw }) };
+    }
+  }
+  // Just a 2-letter state code
+  if (/^[A-Za-z]{2}$/.test(trimmed)) {
+    const abbr = trimmed.toUpperCase();
+    if (Object.values(STATE_NAMES).includes(abbr)) return { state: abbr };
+  }
+  // State name only
+  const byName = STATE_NAMES[trimmed.toLowerCase()];
+  if (byName) return { state: byName };
+  // Fallback: use as text search
+  return { searchQuery: trimmed };
 }
 
 function pointInPolygon(point: [number, number], polygon: [number, number][]): boolean {

@@ -62,6 +62,10 @@ export class ChurchSearchService {
       query = query.eq('state', filters.state.trim().toUpperCase());
     }
 
+    if (filters.city.trim()) {
+      query = query.ilike('city', `${filters.city.trim()}%`);
+    }
+
     if (filters.serviceStyles.length > 0) {
       query = query.in('service_style', filters.serviceStyles);
     }

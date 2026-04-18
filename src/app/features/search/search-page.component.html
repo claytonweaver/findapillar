@@ -59,9 +59,9 @@
       {{ tag }}
       <button (click)="removeTag(tag)" class="filter-pill__x pi pi-times"></button>
     </span>
-    <span *ngIf="filters.state" class="filter-pill">
-      {{ filters.state }}
-      <button (click)="clearState()" class="filter-pill__x pi pi-times"></button>
+    <span *ngIf="filters.city || filters.state" class="filter-pill">
+      {{ cityStateLabel || filters.state }}
+      <button (click)="clearCity(); clearState()" class="filter-pill__x pi pi-times"></button>
     </span>
     <button class="filter-pill-clear" (click)="clearAll()">Clear all</button>
   </div>

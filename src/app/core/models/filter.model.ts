@@ -4,6 +4,7 @@ export interface ChurchFilters {
   serviceStyles: string[];
   tags: string[];
   state: string;
+  city: string;
 }
 
 export const DEFAULT_FILTERS: ChurchFilters = {
@@ -12,6 +13,7 @@ export const DEFAULT_FILTERS: ChurchFilters = {
   serviceStyles: [],
   tags: [],
   state: '',
+  city: '',
 };
 
 export function isDefaultFilters(f: ChurchFilters): boolean {
@@ -20,7 +22,8 @@ export function isDefaultFilters(f: ChurchFilters): boolean {
     f.denominationIds.length === 0 &&
     f.serviceStyles.length === 0 &&
     f.tags.length === 0 &&
-    !f.state
+    !f.state &&
+    !f.city
   );
 }
 
@@ -29,7 +32,8 @@ export function activeFilterCount(f: ChurchFilters): number {
     f.denominationIds.length +
     f.serviceStyles.length +
     f.tags.length +
-    (f.state ? 1 : 0)
+    (f.state ? 1 : 0) +
+    (f.city ? 1 : 0)
   );
 }
 

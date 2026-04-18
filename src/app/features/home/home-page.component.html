@@ -1,0 +1,51 @@
+<div class="home">
+  <header class="home-header">
+    <a routerLink="/" class="home-logo">
+      <div class="home-logo__icon">
+        <svg viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="4" width="24" height="3" rx="0.5" fill="white"/>
+          <rect x="5" y="7" width="5" height="13" rx="0.5" fill="white"/>
+          <rect x="18" y="7" width="5" height="13" rx="0.5" fill="white"/>
+          <rect x="2" y="20" width="24" height="3" rx="0.5" fill="#FBBF24"/>
+        </svg>
+      </div>
+      <span class="home-logo__name">FindAPillar</span>
+    </a>
+  </header>
+
+  <main class="home-hero">
+    <h1 class="home-hero__headline">Find Your<br>Church Home.</h1>
+    <p class="home-hero__sub">Discover churches in your community</p>
+
+    <form class="home-search" (ngSubmit)="onSearch()">
+      <div class="home-search__wrap">
+        <span class="home-search__icon pi pi-map-marker"></span>
+        <input
+          type="text"
+          class="home-search__input"
+          placeholder="City, state, or ZIP code"
+          [(ngModel)]="location"
+          name="location"
+          autocomplete="off"
+          autofocus
+          (ngModelChange)="onInput($event)"
+          (blur)="hideSuggestions()"
+        />
+        <button type="submit" class="home-search__btn">
+          <span class="pi pi-search"></span>
+        </button>
+
+        @if (showSuggestions) {
+          <ul class="home-suggestions">
+            @for (s of suggestions; track s.label) {
+              <li class="home-suggestions__item" (mousedown)="selectSuggestion(s)">
+                <span class="pi pi-map-marker home-suggestions__icon"></span>
+                {{ s.label }}
+              </li>
+            }
+          </ul>
+        }
+      </div>
+    </form>
+  </main>
+</div>

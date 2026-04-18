@@ -4,6 +4,11 @@ export const routes: Routes = [
   {
     path: '',
     loadComponent: () =>
+      import('./features/home/home-page.component').then(m => m.HomePageComponent),
+  },
+  {
+    path: 'search',
+    loadComponent: () =>
       import('./features/search/search-page.component').then(m => m.SearchPageComponent),
   },
   {

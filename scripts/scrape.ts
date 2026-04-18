@@ -2,21 +2,15 @@
 /**
  * FindAPillar church scraper — Google Places API primary, OSM fallback.
  *
- * With GOOGLE_PLACES_API_KEY set (recommended):
- *   - Discovers churches via Google Places Text Search
- *   - Pulls rating, review count, hours, phone, address, photos, reviews
- *   - If the church has a website, scrapes it for doctrine, pastors, etc.
- *   - Saves reviews to church_reviews table
- *
- * Without GOOGLE_PLACES_API_KEY:
- *   - Falls back to OpenStreetMap (Overpass API) discovery
- *   - Scrapes church websites for enrichment
+ * Incremental update: for existing churches, only fills fields that are
+ * missing rather than re-running the full enrichment pipeline every time.
  *
  * Usage:
  *   npx tsx scripts/scrape.ts --city "Austin" --state "TX"
  *   npx tsx scripts/scrape.ts --county "Wayne" --state "MI"
+ *   npx tsx scripts/scrape.ts --counties "Oakland,Macomb,Wayne" --state "MI"
  *   npx tsx scripts/scrape.ts --city "Dallas" --state "TX" --force
- *   npx tsx scripts/scrape.ts --city "Atlanta" --state "GA" --concurrency 5
+ *   npx tsx scripts/scrape.ts --county "Oakland" --state "MI" --concurrency 5
  */
 
 import Anthropic from '@anthropic-ai/sdk'
@@ -86,6 +80,39 @@ interface ChurchRecord {
   googleHours?: ChurchHours
 }
 
+/** Fields loaded from the DB to decide what work is still needed */
+interface ExistingChurch {
+  id: string
+  enriched: boolean
+  cover_photo: string | null
+  photos: string[] | null
+  description: string | null
+  denomination_id: string | null
+  service_style: string | null
+  google_rating: number | null
+  hours: Record<string, any> | null
+  average_attendance: number | null
+  founded_year: number | null
+  email: string | null
+  size: string | null
+  social_links: Record<string, any> | null
+  core_beliefs: Record<string, any> | null
+  pastors: { id: string }[]
+  meeting_times: { id: string }[]
+  church_tags: { id: string }[]
+  church_reviews: { id: string }[]
+}
+
+/** Which enrichment work still needs to happen for an existing church */
+interface Gaps {
+  needsPhotos: boolean        // cover_photo or photos[] missing
+  needsReviews: boolean       // no reviews in DB but record has them
+  needsHours: boolean         // hours missing but Places has them
+  needsGoogleMeta: boolean    // rating / maps_url missing
+  needsWebsiteEnrich: boolean // description / denomination / pastors / style missing
+  needsDenomination: boolean  // denomination_id missing (may not need full LLM)
+}
+
 interface GooglePlaceBasic {
   id: string
   displayName?: { text: string }
@@ -152,6 +179,49 @@ async function placesTextSearch(
   return { places: data.places ?? [], nextPageToken: data.nextPageToken }
 }
 
+async function placesNearbySearch(
+  lat: number, lng: number, radiusMeters: number
+): Promise<GooglePlaceBasic[]> {
+  const body = {
+    includedTypes: ['church'],
+    maxResultCount: 20,
+    locationRestriction: {
+      circle: { center: { latitude: lat, longitude: lng }, radius: radiusMeters },
+    },
+  }
+  const res = await fetch(`${PLACES_BASE}/places:searchNearby`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+      'X-Goog-FieldMask': [
+        'places.id', 'places.displayName', 'places.formattedAddress',
+        'places.location', 'places.rating', 'places.userRatingCount',
+        'places.websiteUri', 'places.googleMapsUri',
+      ].join(','),
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Places Nearby ${res.status}: ${await res.text()}`)
+  return ((await res.json()) as any).places ?? []
+}
+
+/** Returns [south, north, west, east] bounding box for a location string via Nominatim. */
+async function geocodeForBbox(location: string): Promise<[number, number, number, number] | null> {
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(location)}&format=json&limit=1`,
+      { headers: { 'User-Agent': 'FindAPillar/1.0' } }
+    )
+    const data = await res.json() as any[]
+    if (!data?.length) return null
+    const bb = data[0].boundingbox
+    return bb ? [parseFloat(bb[0]), parseFloat(bb[1]), parseFloat(bb[2]), parseFloat(bb[3])] : null
+  } catch {
+    return null
+  }
+}
+
 async function placesGetDetails(placeId: string): Promise<GooglePlaceDetails> {
   const res = await fetch(`${PLACES_BASE}/places/${placeId}`, {
     headers: {
@@ -183,7 +253,7 @@ async function resolveStreetViewUrl(lat: number, lng: number): Promise<string | 
   }
 }
 
-/** Resolves a Places photo name to a direct CDN image URL (no API key in stored URL) */
+/** Resolves a Places photo name to a direct CDN image URL */
 async function resolvePhotoUrl(photoName: string, maxW = 1200, maxH = 900): Promise<string | null> {
   const url = `${PLACES_BASE}/${photoName}/media?maxWidthPx=${maxW}&maxHeightPx=${maxH}&skipHttpRedirect=true&key=${GOOGLE_PLACES_API_KEY}`
   try {
@@ -211,62 +281,101 @@ function convertGoogleHours(hours: GooglePlaceDetails['regularOpeningHours']): C
   return result
 }
 
-/** Collect all pages of church results for a city/state */
-async function discoverViaGooglePlaces(city: string, state: string): Promise<ChurchRecord[]> {
-  const query = `churches in ${city} ${state}`
-  console.log(`  → Google Places: "${query}"`)
+async function fetchPlaceDetails(place: GooglePlaceBasic): Promise<ChurchRecord | null> {
+  if (!place.id) return null
+  const details = await placesGetDetails(place.id)
+  const photos  = (await Promise.all(
+    (details.photos ?? []).slice(0, 5).map(p => resolvePhotoUrl(p.name))
+  )).filter((u): u is string => !!u)
+  const reviews = (details.reviews ?? []).map(r => ({
+    authorAttribution: r.authorAttribution,
+    rating: r.rating,
+    text: r.text,
+    publishTime: r.publishTime,
+  }))
+  return {
+    name:              details.displayName?.text ?? place.displayName?.text ?? 'Unknown Church',
+    lat:               details.location?.latitude  ?? null,
+    lng:               details.location?.longitude ?? null,
+    website:           details.websiteUri ?? null,
+    phone:             details.internationalPhoneNumber ?? null,
+    address:           details.formattedAddress ?? '',
+    osmDenomination:   null,
+    googlePlaceId:     details.id,
+    googleRating:      details.rating ?? null,
+    googleReviewCount: details.userRatingCount ?? null,
+    googleMapsUrl:     details.googleMapsUri ?? null,
+    googlePhotos:      photos,
+    googleReviews:     reviews,
+    googleHours:       convertGoogleHours(details.regularOpeningHours),
+  }
+}
 
+/** Collect all pages of church results for a location query, plus a bounding-box grid nearby search. */
+async function discoverViaGooglePlaces(locationQuery: string): Promise<ChurchRecord[]> {
+  const seenIds = new Set<string>()
   const records: ChurchRecord[] = []
+
+  // ── 1. Text search (paginates up to ~60 results) ──────────────────────────
+  console.log(`  → Text search: "churches in ${locationQuery}"`)
   let pageToken: string | undefined
-
   do {
-    const { places, nextPageToken } = await placesTextSearch(query, pageToken)
+    const { places, nextPageToken } = await placesTextSearch(`churches in ${locationQuery}`, pageToken)
     pageToken = nextPageToken
-
     for (const place of places) {
-      if (!place.id) continue
+      if (!place.id || seenIds.has(place.id)) continue
+      seenIds.add(place.id)
       try {
-        const details = await placesGetDetails(place.id)
-        const photos  = (await Promise.all(
-          (details.photos ?? []).slice(0, 5).map(p => resolvePhotoUrl(p.name))
-        )).filter((u): u is string => !!u)
-        const reviews = (details.reviews ?? []).map(r => ({
-          authorAttribution: r.authorAttribution,
-          rating: r.rating,
-          text: r.text,
-          publishTime: r.publishTime,
-        }))
+        const record = await fetchPlaceDetails(place)
+        if (record) { records.push(record); process.stdout.write('.') }
+      } catch { process.stdout.write('x') }
+    }
+    if (nextPageToken) await delay(500)
+  } while (pageToken)
+  process.stdout.write('\n')
 
-        // Parse address components
-        const comps = details.addressComponents ?? []
-        const getComp = (type: string) => comps.find(c => c.types.includes(type))?.longText ?? null
+  // ── 2. Grid nearby search across bounding box ─────────────────────────────
+  const bbox = await geocodeForBbox(locationQuery)
+  if (bbox) {
+    const [south, north, west, east] = bbox
+    const GRID = 3
+    const latStep = (north - south) / GRID
+    const lngStep = (east - west) / GRID
+    const midLat  = (north + south) / 2
+    const cellLatKm = latStep * 111
+    const cellLngKm = lngStep * 111 * Math.cos(midLat * Math.PI / 180)
+    const radiusM = Math.ceil(Math.max(cellLatKm, cellLngKm) * 1000)
 
-        records.push({
-          name:              details.displayName?.text ?? place.displayName?.text ?? 'Unknown Church',
-          lat:               details.location?.latitude  ?? null,
-          lng:               details.location?.longitude ?? null,
-          website:           details.websiteUri ?? null,
-          phone:             details.internationalPhoneNumber ?? null,
-          address:           details.formattedAddress ?? '',
-          osmDenomination:   null,
-          googlePlaceId:     details.id,
-          googleRating:      details.rating ?? null,
-          googleReviewCount: details.userRatingCount ?? null,
-          googleMapsUrl:     details.googleMapsUri ?? null,
-          googlePhotos:      photos,
-          googleReviews:     reviews,
-          googleHours:       convertGoogleHours(details.regularOpeningHours),
-        })
-        process.stdout.write('.')
-      } catch (err: any) {
-        process.stdout.write('x')
+    console.log(`  → Grid nearby search ${GRID}×${GRID}, radius ~${Math.round(radiusM / 1000)}km each`)
+    const gridPlaces: GooglePlaceBasic[] = []
+    for (let i = 0; i < GRID; i++) {
+      for (let j = 0; j < GRID; j++) {
+        const lat = south + (i + 0.5) * latStep
+        const lng = west  + (j + 0.5) * lngStep
+        try {
+          const found = await placesNearbySearch(lat, lng, radiusM)
+          gridPlaces.push(...found)
+          process.stdout.write('.')
+        } catch { process.stdout.write('x') }
+        await delay(200)
       }
     }
+    process.stdout.write('\n')
 
-    if (nextPageToken) await delay(500) // be polite between pages
-  } while (pageToken)
+    const newPlaces = gridPlaces.filter(p => p.id && !seenIds.has(p.id))
+    console.log(`  Grid found ${gridPlaces.length} total, ${newPlaces.length} new`)
 
-  process.stdout.write('\n')
+    for (const place of newPlaces) {
+      if (!place.id) continue
+      seenIds.add(place.id)
+      try {
+        const record = await fetchPlaceDetails(place)
+        if (record) { records.push(record); process.stdout.write('.') }
+      } catch { process.stdout.write('x') }
+    }
+    if (newPlaces.length) process.stdout.write('\n')
+  }
+
   return records
 }
 
@@ -435,10 +544,9 @@ function estimateSize(
     if (fbFollowers >= 500)  return 'medium'
     return 'small'
   }
-  // Google review count is a decent proxy for church size
   if (reviewCount) {
-    if (reviewCount >= 150) return 'large'
-    if (reviewCount >= 40)  return 'medium'
+    if (reviewCount >= 100) return 'large'
+    if (reviewCount >= 25)  return 'medium'
     return 'small'
   }
   if (llmEstimate && ['small','medium','large'].includes(llmEstimate)) return llmEstimate as any
@@ -527,7 +635,6 @@ RULES:
 
 // ── Denomination lookup ───────────────────────────────────────────────────────
 
-// Map LLM denomination strings that don't exist verbatim in the DB
 const DENOM_ALIASES: [RegExp, string][] = [
   [/evangelical/i,          'Non-Denominational'],
   [/church of christ/i,     'Protestant'],
@@ -543,7 +650,6 @@ const DENOM_ALIASES: [RegExp, string][] = [
 async function findDenomination(name: string | null) {
   if (!name) return { id: null, path: null }
 
-  // Apply alias mapping first
   let lookupName = name
   for (const [pattern, alias] of DENOM_ALIASES) {
     if (pattern.test(name)) { lookupName = alias; break }
@@ -551,7 +657,6 @@ async function findDenomination(name: string | null) {
 
   let { data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', lookupName).limit(1).maybeSingle()
   if (!data && lookupName !== name) {
-    // Alias didn't match exactly — try original name
     ;({ data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', name).limit(1).maybeSingle() as any)
   }
   if (!data) {
@@ -570,11 +675,66 @@ async function findDenomination(name: string | null) {
   return { id: data.id, path }
 }
 
-// ── Upsert ────────────────────────────────────────────────────────────────────
+// ── Slug ──────────────────────────────────────────────────────────────────────
 
 function toSlug(name: string, city: string | null) {
   return `${name}-${city ?? ''}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 }
+
+// ── DB helpers ────────────────────────────────────────────────────────────────
+
+const EXISTING_SELECT = `
+  id, enriched, cover_photo, photos, description, denomination_id, service_style,
+  google_rating, hours, average_attendance, founded_year, email, size, social_links, core_beliefs,
+  pastors(id), meeting_times(id), church_tags(id), church_reviews(id)
+`
+
+/** Load a church's current state from the DB, matched by place_id then slug. */
+async function loadExisting(record: ChurchRecord): Promise<ExistingChurch | null> {
+  if (record.googlePlaceId) {
+    const { data } = await supabase
+      .from('churches')
+      .select(EXISTING_SELECT)
+      .eq('google_place_id', record.googlePlaceId)
+      .maybeSingle()
+    if (data) return data as ExistingChurch
+  }
+  const { data } = await supabase
+    .from('churches')
+    .select(EXISTING_SELECT)
+    .eq('slug', toSlug(record.name, null))
+    .maybeSingle()
+  return (data as ExistingChurch | null) ?? null
+}
+
+/** Determine which enrichment steps are still needed for an existing church. */
+function computeGaps(existing: ExistingChurch, record: ChurchRecord): Gaps {
+  const hasGooglePhotos = !!(record.googlePhotos?.length)
+  const hasGoogleHours  = !!(record.googleHours && Object.keys(record.googleHours).length)
+  const hasGoogleReviews = !!(record.googleReviews?.length)
+
+  return {
+    needsPhotos:
+      !existing.cover_photo || !existing.photos?.length,
+    needsReviews:
+      !existing.church_reviews?.length && hasGoogleReviews,
+    needsHours:
+      !existing.hours && hasGoogleHours,
+    needsGoogleMeta:
+      (!existing.google_rating && !!record.googleRating),
+    needsWebsiteEnrich:
+      !!record.website && (
+        !existing.enriched ||
+        !existing.description ||
+        !existing.service_style ||
+        !existing.pastors?.length
+      ),
+    needsDenomination:
+      !existing.denomination_id,
+  }
+}
+
+// ── Upsert (new churches) ─────────────────────────────────────────────────────
 
 async function upsertChurch(opts: {
   extracted: any
@@ -652,7 +812,6 @@ async function upsertChurch(opts: {
     }
   }
 
-  // Save Google reviews
   if (record.googleReviews?.length) {
     await supabase.from('church_reviews').delete().eq('church_id', id)
     const reviewRows = record.googleReviews
@@ -670,6 +829,275 @@ async function upsertChurch(opts: {
 
   return id
 }
+
+// ── Incremental patch (existing churches) ────────────────────────────────────
+
+async function incrementalUpdate(
+  existing: ExistingChurch,
+  record: ChurchRecord,
+  gaps: Gaps,
+): Promise<'partial' | 'enriched'> {
+  const id = existing.id
+  const patch: Record<string, any> = { last_scraped_at: new Date().toISOString() }
+  const updateLog: string[] = []
+  let llmRan = false
+
+  // ── Google meta ────────────────────────────────────────────────────────────
+  if (gaps.needsGoogleMeta) {
+    if (record.googleRating)      patch['google_rating']       = record.googleRating
+    if (record.googleReviewCount) patch['google_review_count'] = record.googleReviewCount
+    if (record.googleMapsUrl)     patch['google_maps_url']     = record.googleMapsUrl
+    if (record.googlePlaceId)     patch['google_place_id']     = record.googlePlaceId
+    updateLog.push('google meta')
+  }
+
+  if (gaps.needsHours) {
+    patch['hours'] = record.googleHours
+    updateLog.push('hours')
+  }
+
+  // ── Reviews ────────────────────────────────────────────────────────────────
+  if (gaps.needsReviews && record.googleReviews?.length) {
+    await supabase.from('church_reviews').delete().eq('church_id', id)
+    const rows = record.googleReviews
+      .filter(r => r.text?.text)
+      .map(r => ({
+        church_id:   id,
+        author_name: r.authorAttribution?.displayName ?? null,
+        rating:      r.rating ?? null,
+        text:        r.text?.text ?? null,
+        review_date: r.publishTime ? r.publishTime.split('T')[0] : null,
+        source:      'google',
+      }))
+    if (rows.length) {
+      await supabase.from('church_reviews').insert(rows)
+      updateLog.push(`${rows.length} reviews`)
+    }
+  }
+
+  // ── Website enrichment (LLM) ───────────────────────────────────────────────
+  if (gaps.needsWebsiteEnrich && record.website) {
+    const websiteData = await scrapePage(record.website)
+    const fbData: FacebookData = websiteData.socialLinks.facebook
+      ? await scrapeFacebook(websiteData.socialLinks.facebook)
+      : { followers: null, coverPhoto: null }
+
+    const reviewSnippets = (record.googleReviews ?? [])
+      .map(r => r.text?.text ?? '').filter(Boolean).join('\n---\n').slice(0, 5000)
+
+    const extracted = await extractChurchData(
+      record.name, record.address, record.phone, record.website,
+      record.osmDenomination, websiteData.text,
+      { ...websiteData.socialLinks }, fbData.followers,
+      record.googleReviewCount ?? null, record.googleRating ?? null, reviewSnippets,
+    )
+    llmRan = true
+
+    // Only write fields that are still missing
+    if (!existing.description && extracted.description)
+      patch['description'] = extracted.description
+    if (!existing.service_style && extracted.service_style &&
+        ['traditional','contemporary','blended','liturgical'].includes(extracted.service_style))
+      patch['service_style'] = extracted.service_style
+    if (!existing.average_attendance && extracted.average_attendance)
+      patch['average_attendance'] = extracted.average_attendance
+    if (!existing.founded_year && extracted.founded_year)
+      patch['founded_year'] = extracted.founded_year
+    if (!existing.email && extracted.email)
+      patch['email'] = extracted.email
+    if (!existing.core_beliefs && extracted.core_beliefs)
+      patch['core_beliefs'] = extracted.core_beliefs
+    if (!existing.social_links && Object.keys(websiteData.socialLinks).length)
+      patch['social_links'] = websiteData.socialLinks
+
+    // Size
+    const size = estimateSize(
+      extracted.average_attendance ?? null, fbData.followers,
+      record.googleReviewCount ?? null, extracted.size_estimate ?? null,
+    )
+    if (size && !existing.size) patch['size'] = size
+
+    // Photos — og:image as fallback
+    if (gaps.needsPhotos && !existing.cover_photo && websiteData.ogImage)
+      patch['cover_photo'] = websiteData.ogImage
+
+    // Denomination from LLM result
+    if (gaps.needsDenomination) {
+      const denomName = extracted.denomination_name ?? record.osmDenomination ?? null
+      if (denomName) {
+        const denom = await findDenomination(denomName)
+        if (denom.id) {
+          patch['denomination_id']   = denom.id
+          patch['denomination_path'] = denom.path
+          updateLog.push('denomination')
+        }
+      }
+    }
+
+    // Pastors — only if none exist yet
+    if (!existing.pastors?.length && extracted.pastors?.length) {
+      await supabase.from('pastors').delete().eq('church_id', id)
+      await supabase.from('pastors').insert(
+        extracted.pastors.map((p: any) => ({
+          name: p.name, title: p.title ?? null, bio: p.bio ?? null,
+          is_primary: p.is_primary ?? false, seminary: p.seminary ?? null, church_id: id,
+        }))
+      )
+      updateLog.push(`${extracted.pastors.length} pastors`)
+    }
+
+    // Meeting times — only if none exist yet
+    if (!existing.meeting_times?.length && extracted.meeting_times?.length) {
+      await supabase.from('meeting_times').delete().eq('church_id', id)
+      await supabase.from('meeting_times').insert(
+        extracted.meeting_times.map((m: any) => ({ ...m, church_id: id }))
+      )
+      updateLog.push('meeting times')
+    }
+
+    // Tags — only if none exist yet
+    if (!existing.church_tags?.length && extracted.tags?.length) {
+      const valid = extracted.tags.filter((t: string) => VALID_TAGS.includes(t))
+      if (valid.length) {
+        await supabase.from('church_tags').delete().eq('church_id', id)
+        await supabase.from('church_tags').insert(valid.map((tag: string) => ({ church_id: id, tag })))
+        updateLog.push(`${valid.length} tags`)
+      }
+    }
+
+    patch['enriched'] = true
+    updateLog.push('LLM')
+  } else if (gaps.needsDenomination && !gaps.needsWebsiteEnrich) {
+    // Denomination-only: try osmDenomination without full LLM
+    const denom = await findDenomination(record.osmDenomination ?? null)
+    if (denom.id) {
+      patch['denomination_id']   = denom.id
+      patch['denomination_path'] = denom.path
+      updateLog.push('denomination')
+    }
+  }
+
+  // ── Photos — Google Photos + Street View fallback ──────────────────────────
+  if (gaps.needsPhotos && !patch['cover_photo']) {
+    const googleCover = record.googlePhotos?.[0] ?? null
+    let coverPhoto: string | null = googleCover
+
+    if (!coverPhoto && record.lat && record.lng) {
+      coverPhoto = await resolveStreetViewUrl(record.lat, record.lng)
+    }
+
+    if (coverPhoto) {
+      patch['cover_photo'] = coverPhoto
+      updateLog.push('cover photo')
+    }
+    if (!existing.photos?.length && record.googlePhotos?.length) {
+      patch['photos'] = record.googlePhotos.slice(0, 8)
+      updateLog.push(`${record.googlePhotos.length} photos`)
+    }
+  }
+
+  // Apply the patch
+  if (Object.keys(patch).length > 1) {
+    const { error } = await supabase.from('churches').update(patch).eq('id', id)
+    if (error) throw error
+  }
+
+  const summary = updateLog.length ? updateLog.join(', ') : 'up to date'
+  process.stdout.write(`  ↻ ${record.name} [${summary}]\n`)
+  return llmRan ? 'enriched' : 'partial'
+}
+
+// ── Full enrichment (new church or --force) ───────────────────────────────────
+
+async function fullEnrich(record: ChurchRecord): Promise<'enriched'> {
+  // 1. Scrape website
+  let websiteData: PageData = { text: '', ogImage: null, socialLinks: {} }
+  if (record.website) websiteData = await scrapePage(record.website)
+
+  // 2. Facebook
+  let fbData: FacebookData = { followers: null, coverPhoto: null }
+  if (websiteData.socialLinks.facebook)
+    fbData = await scrapeFacebook(websiteData.socialLinks.facebook)
+
+  // 3. Review snippets for LLM
+  const reviewSnippets = (record.googleReviews ?? [])
+    .map(r => r.text?.text ?? '').filter(Boolean).join('\n---\n').slice(0, 5000)
+
+  // 4. LLM extraction
+  const extracted = await extractChurchData(
+    record.name, record.address, record.phone, record.website ?? '',
+    record.osmDenomination, websiteData.text,
+    { ...websiteData.socialLinks },
+    fbData.followers, record.googleReviewCount ?? null,
+    record.googleRating ?? null, reviewSnippets,
+  )
+
+  // 5. Best photo: Google → og:image → Facebook → Street View
+  const googleCover = record.googlePhotos?.[0] ?? null
+  let coverPhoto    = googleCover ?? websiteData.ogImage ?? fbData.coverPhoto ?? null
+  if (!coverPhoto && record.lat && record.lng)
+    coverPhoto = await resolveStreetViewUrl(record.lat, record.lng)
+
+  const photos = [
+    ...(record.googlePhotos ?? []),
+    ...(websiteData.ogImage ? [websiteData.ogImage] : []),
+  ].filter((v, i, a) => a.indexOf(v) === i).slice(0, 8)
+
+  // 6. Size
+  const size = estimateSize(
+    extracted.average_attendance ?? null, fbData.followers,
+    record.googleReviewCount ?? null, extracted.size_estimate ?? null,
+  )
+
+  // 7. Denomination
+  const denomResult = await findDenomination(
+    extracted.denomination_name ?? record.osmDenomination ?? null
+  )
+
+  // 8. Upsert
+  await upsertChurch({
+    extracted, record, coverPhoto, photos, size, denomResult,
+    socialLinks: { ...websiteData.socialLinks },
+  })
+
+  const extras = [
+    coverPhoto ? '📷' : '',
+    size ?? '',
+    record.googleRating ? `⭐${record.googleRating}` : '',
+    record.googleReviewCount ? `${record.googleReviewCount} reviews` : '',
+    extracted.pastors?.some((p: any) => p.seminary) ? '🎓' : '',
+  ].filter(Boolean).join(' ')
+  process.stdout.write(`  ✓ ${extracted.name ?? record.name}${extracted.city ? ` (${extracted.city})` : ''} ${extras}\n`)
+  return 'enriched'
+}
+
+// ── Process a single church record ────────────────────────────────────────────
+
+async function processChurch(
+  record: ChurchRecord, force: boolean
+): Promise<'enriched' | 'partial' | 'skipped' | 'error'> {
+  try {
+    const existing = await loadExisting(record)
+
+    if (existing && !force) {
+      const gaps = computeGaps(existing, record)
+      const anyGap = Object.values(gaps).some(Boolean)
+      if (!anyGap) {
+        process.stdout.write(`  ⟳ ${record.name} (complete)\n`)
+        return 'skipped'
+      }
+      return await incrementalUpdate(existing, record, gaps)
+    }
+
+    // New church (or --force)
+    return await fullEnrich(record)
+  } catch (err: any) {
+    process.stdout.write(`  ✗ ${record.name}: ${err.message.slice(0, 80)}\n`)
+    return 'error'
+  }
+}
+
+// ── OSM-only batch save ───────────────────────────────────────────────────────
 
 async function saveOsmOnlyBatch(places: any[]) {
   const rows = places.filter(p => p.tags?.name).map((place: any) => {
@@ -692,95 +1120,62 @@ async function saveOsmOnlyBatch(places: any[]) {
   return rows.length
 }
 
-// ── Process a single church record ───────────────────────────────────────────
-
-async function processChurch(record: ChurchRecord, force: boolean): Promise<'enriched' | 'skipped' | 'error'> {
-  // Check if already enriched (skip if not forced)
-  if (!force && (record.googlePlaceId || record.website)) {
-    const key = record.googlePlaceId ? 'google_place_id' : 'slug'
-    const val = record.googlePlaceId ?? toSlug(record.name, null)
-    const { data } = await supabase.from('churches').select('enriched').eq(key, val).maybeSingle()
-    if (data?.enriched) {
-      process.stdout.write(`  ⟳ ${record.name} (already enriched)\n`)
-      return 'skipped'
-    }
-  }
-
-  try {
-    // 1. Scrape website for doctrine/pastors/beliefs
-    let websiteData: PageData = { text: '', ogImage: null, socialLinks: {} }
-    if (record.website) {
-      websiteData = await scrapePage(record.website)
-    }
-
-    // 2. Facebook extra data
-    let fbData: FacebookData = { followers: null, coverPhoto: null }
-    if (websiteData.socialLinks.facebook) {
-      fbData = await scrapeFacebook(websiteData.socialLinks.facebook)
-    }
-
-    // 3. Build review text for LLM context (from Google reviews)
-    const reviewSnippets = (record.googleReviews ?? [])
-      .map(r => r.text?.text ?? '')
-      .filter(Boolean)
-      .join('\n---\n')
-      .slice(0, 5000)
-
-    // 4. LLM extraction
-    const extracted = await extractChurchData(
-      record.name, record.address, record.phone, record.website ?? '',
-      record.osmDenomination, websiteData.text,
-      { ...websiteData.socialLinks },
-      fbData.followers, record.googleReviewCount ?? null,
-      record.googleRating ?? null, reviewSnippets,
-    )
-
-    // 5. Best available photo (Google Places → og:image → Facebook → Street View exterior)
-    const googleCover = record.googlePhotos?.[0] ?? null
-    let coverPhoto    = googleCover ?? websiteData.ogImage ?? fbData.coverPhoto ?? null
-    if (!coverPhoto && record.lat && record.lng) {
-      coverPhoto = await resolveStreetViewUrl(record.lat, record.lng)
-    }
-    const photos = [
-      ...(record.googlePhotos ?? []),
-      ...(websiteData.ogImage ? [websiteData.ogImage] : []),
-    ].filter((v, i, a) => a.indexOf(v) === i).slice(0, 8)
-
-    // 6. Size estimation
-    const size = estimateSize(
-      extracted.average_attendance ?? null,
-      fbData.followers,
-      record.googleReviewCount ?? null,
-      extracted.size_estimate ?? null,
-    )
-
-    // 7. Denomination matching
-    const denomResult = await findDenomination(extracted.denomination_name ?? record.osmDenomination ?? null)
-
-    // 8. Upsert everything
-    await upsertChurch({
-      extracted, record, coverPhoto, photos, size, denomResult,
-      socialLinks: { ...websiteData.socialLinks },
-    })
-
-    const extras = [
-      coverPhoto ? '📷' : '',
-      size ?? '',
-      record.googleRating ? `⭐${record.googleRating}` : '',
-      record.googleReviewCount ? `${record.googleReviewCount} reviews` : '',
-      extracted.pastors?.some((p: any) => p.seminary) ? '🎓' : '',
-    ].filter(Boolean).join(' ')
-    process.stdout.write(`  ✓ ${extracted.name ?? record.name}${extracted.city ? ` (${extracted.city})` : ''} ${extras}\n`)
-    return 'enriched'
-  } catch (err: any) {
-    process.stdout.write(`  ✗ ${record.name}: ${err.message.slice(0, 80)}\n`)
-    return 'error'
-  }
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const delay = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+// ── Per-location scrape ───────────────────────────────────────────────────────
+
+async function scrapeLocation(opts: {
+  city?: string
+  county?: string
+  state: string
+  force: boolean
+  concurrency: number
+}): Promise<{ enriched: number; partial: number; skipped: number; errors: number; osmOnly: number }> {
+  const { city, county, state, force, concurrency } = opts
+  const label = county ? `${county} County, ${state}` : `${city}, ${state}`
+  console.log(`\n${'─'.repeat(60)}`)
+  console.log(`Location: ${label}`)
+  console.log(`${'─'.repeat(60)}`)
+
+  let records: ChurchRecord[] = []
+  let osmOnly = 0
+
+  if (GOOGLE_PLACES_API_KEY) {
+    const locationQuery = county
+      ? `${county} County, ${state}`
+      : `${city!}, ${state}`
+    records = await discoverViaGooglePlaces(locationQuery)
+    console.log(`Found ${records.length} churches via Google Places`)
+  } else {
+    const location = county ? `${county} County, ${state}` : `${city!}, ${state}`
+    const places = await discoverViaOsm(location)
+    const withWebsite    = places.filter(p => p.tags?.['website'] ?? p.tags?.['contact:website'] ?? p.tags?.['url'])
+    const withoutWebsite = places.filter(p => !(p.tags?.['website'] ?? p.tags?.['contact:website'] ?? p.tags?.['url']))
+    console.log(`Found ${places.length} churches via OSM`)
+    osmOnly = await saveOsmOnlyBatch(withoutWebsite)
+    console.log(`Saved ${osmOnly} OSM-only churches`)
+    records = withWebsite.map(osmPlaceToRecord)
+  }
+
+  console.log(`Processing ${records.length} churches (concurrency: ${concurrency})...\n`)
+
+  let enriched = 0, partial = 0, skipped = 0, errors = 0
+  for (let i = 0; i < records.length; i += concurrency) {
+    const batch   = records.slice(i, i + concurrency)
+    const results = await Promise.all(batch.map(r => processChurch(r, force)))
+    for (const r of results) {
+      if (r === 'enriched')    enriched++
+      else if (r === 'partial') partial++
+      else if (r === 'skipped') skipped++
+      else errors++
+    }
+  }
+
+  console.log(`\n  ✓ Enriched: ${enriched}  ↻ Patched: ${partial}  ⟳ Skipped: ${skipped}  ✗ Errors: ${errors}${osmOnly ? `  OSM-only: ${osmOnly}` : ''}`)
+  return { enriched, partial, skipped, errors, osmOnly }
+}
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -789,65 +1184,52 @@ async function main() {
   const get         = (flag: string) => { const i = args.indexOf(flag); return i !== -1 ? args[i + 1] : undefined }
   const city        = get('--city')
   const county      = get('--county')
+  const countiesRaw = get('--counties')  // comma-separated: "Oakland,Macomb,Wayne"
   const state       = get('--state')
   const force       = args.includes('--force')
   const concurrency = parseInt(get('--concurrency') ?? '3')
 
-  if (!city && !county) {
-    console.error('Usage: npx tsx scripts/scrape.ts --city "Austin" --state "TX"')
-    console.error('       npx tsx scripts/scrape.ts --county "Wayne" --state "MI" [--force] [--concurrency 3]')
+  if (!city && !county && !countiesRaw) {
+    console.error('Usage:')
+    console.error('  npx tsx scripts/scrape.ts --city "Austin" --state "TX"')
+    console.error('  npx tsx scripts/scrape.ts --county "Wayne" --state "MI"')
+    console.error('  npx tsx scripts/scrape.ts --counties "Oakland,Macomb,Wayne" --state "MI" [--force] [--concurrency 3]')
     process.exit(1)
   }
 
-  const location = county ? `${county} County, ${state ?? ''}` : `${city}, ${state ?? ''}`
-  console.log(`\nFinding churches in: ${location}`)
-  if (GOOGLE_PLACES_API_KEY) console.log('  Mode: Google Places API + website enrichment')
-  else                        console.log('  Mode: OSM fallback (no Google Places API key)')
-  if (force) console.log('  --force: re-enriching already-enriched churches')
-  console.log()
+  const mode = GOOGLE_PLACES_API_KEY
+    ? 'Google Places API + incremental website enrichment'
+    : 'OSM fallback (no Google Places API key)'
+  console.log(`\nFindAPillar scraper — ${mode}`)
+  if (force) console.log('  --force: re-enriching already-complete churches')
 
-  let records: ChurchRecord[] = []
-  let osmOnlySaved = 0
+  const locations: Array<{ city?: string; county?: string; state: string }> = []
 
-  if (GOOGLE_PLACES_API_KEY) {
-    // ── Google Places path ────────────────────────────────────
-    const target = county ? `${county} County, ${state ?? ''}` : `${city!}, ${state ?? ''}`
-    records = await discoverViaGooglePlaces(city ?? county!, state ?? '')
-    console.log(`Found ${records.length} churches via Google Places`)
-  } else {
-    // ── OSM fallback path ─────────────────────────────────────
-    const places = await discoverViaOsm(location)
-    const withWebsite    = places.filter(p => p.tags?.['website'] ?? p.tags?.['contact:website'] ?? p.tags?.['url'])
-    const withoutWebsite = places.filter(p => !(p.tags?.['website'] ?? p.tags?.['contact:website'] ?? p.tags?.['url']))
-
-    console.log(`Found ${places.length} churches via OSM`)
-    console.log(`  ${withWebsite.length} have websites (will fully enrich)`)
-    console.log(`  ${withoutWebsite.length} no website (saving basic data)\n`)
-
-    osmOnlySaved = await saveOsmOnlyBatch(withoutWebsite)
-    console.log(`Saved ${osmOnlySaved} OSM-only churches\n`)
-
-    records = withWebsite.map(osmPlaceToRecord)
-  }
-
-  console.log(`Enriching ${records.length} churches (concurrency: ${concurrency})...\n`)
-
-  let enriched = 0, skipped = 0, errors = 0
-  for (let i = 0; i < records.length; i += concurrency) {
-    const batch   = records.slice(i, i + concurrency)
-    const results = await Promise.all(batch.map(r => processChurch(r, force)))
-    for (const r of results) {
-      if (r === 'enriched') enriched++
-      else if (r === 'skipped') skipped++
-      else errors++
+  if (countiesRaw) {
+    for (const c of countiesRaw.split(',').map(s => s.trim()).filter(Boolean)) {
+      locations.push({ county: c, state: state ?? '' })
     }
+  } else if (county) {
+    locations.push({ county, state: state ?? '' })
+  } else if (city) {
+    locations.push({ city, state: state ?? '' })
   }
 
-  console.log(`\nDone!`)
-  console.log(`  Enriched:  ${enriched}`)
-  console.log(`  Skipped:   ${skipped}`)
-  console.log(`  Errors:    ${errors}`)
-  if (osmOnlySaved) console.log(`  OSM-only:  ${osmOnlySaved}`)
+  let totalEnriched = 0, totalPartial = 0, totalSkipped = 0, totalErrors = 0, totalOsm = 0
+  for (const loc of locations) {
+    const r = await scrapeLocation({ ...loc, force, concurrency })
+    totalEnriched += r.enriched
+    totalPartial  += r.partial
+    totalSkipped  += r.skipped
+    totalErrors   += r.errors
+    totalOsm      += r.osmOnly
+  }
+
+  if (locations.length > 1) {
+    console.log(`\n${'═'.repeat(60)}`)
+    console.log(`TOTAL across ${locations.length} locations`)
+    console.log(`  ✓ Enriched: ${totalEnriched}  ↻ Patched: ${totalPartial}  ⟳ Skipped: ${totalSkipped}  ✗ Errors: ${totalErrors}${totalOsm ? `  OSM-only: ${totalOsm}` : ''}`)
+  }
 }
 
 main().catch(err => { console.error(err); process.exit(1) })
