@@ -56,19 +56,16 @@ export class ChurchSearchService {
       .select(CHURCH_SELECT)
       .eq('is_active', true)
       .order('name')
-      .limit(100);
+      .limit(200);
 
-    // Server-side: state filter (precise equality)
     if (filters.state.trim()) {
       query = query.eq('state', filters.state.trim().toUpperCase());
     }
 
-    // Server-side: service style
     if (filters.serviceStyles.length > 0) {
       query = query.in('service_style', filters.serviceStyles);
     }
 
-    // Server-side: denomination (expand selected IDs to include descendants)
     if (filters.denominationIds.length > 0) {
       const expanded = this.denominationService.expandToDescendants(denominations, filters.denominationIds);
       query = query.in('denomination_id', expanded);
@@ -79,7 +76,6 @@ export class ChurchSearchService {
     return (data ?? []) as Church[];
   }
 
-  /** Client-side: text search (name, city, denomination path) and tag filtering. */
   private applyClientFilters(churches: Church[], filters: ChurchFilters): Church[] {
     let results = churches;
 
@@ -105,7 +101,9 @@ export class ChurchSearchService {
 const CHURCH_SELECT = `
   id, name, slug, description, street_address, city, state, zip,
   lat, lng, website, phone, email, founded_year, average_attendance,
-  denomination_id, denomination_path, service_style, cover_photo,
-  core_beliefs, size, enriched, is_verified, is_active,
-  pastors(*), meeting_times(*), church_tags(*)
+  denomination_id, denomination_path, service_style, cover_photo, photos,
+  core_beliefs, social_links, hours, size, enriched, is_verified, is_active,
+  google_place_id, google_rating, google_review_count, google_maps_url,
+  pastors(*), meeting_times(*), church_tags(*),
+  church_reviews(id, author_name, rating, text, review_date, source)
 `;

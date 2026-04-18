@@ -18,11 +18,9 @@
   </a>
 </header>
 
-<!-- Loading state -->
+<!-- Loading -->
 <div *ngIf="loading" class="detail-page">
-  <div class="detail-hero-skeleton">
-    <p-skeleton width="100%" height="100%" borderRadius="1.25rem" />
-  </div>
+  <div class="detail-hero-skeleton"><p-skeleton width="100%" height="100%" borderRadius="1.25rem" /></div>
   <div class="detail-main">
     <div class="detail-content">
       <p-skeleton width="20%" height="12px" styleClass="mb-3" />
@@ -42,20 +40,27 @@
 <!-- Church detail -->
 <main *ngIf="!loading && church" class="detail-page">
 
-  <!-- Hero -->
-  <div class="detail-hero">
-    <img *ngIf="church.cover_photo" [src]="church.cover_photo" [alt]="church.name" />
-    <div *ngIf="!church.cover_photo" class="detail-hero__placeholder">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
-          d="M3 21V7l9-4 9 4v14M9 21V11h6v10" />
-      </svg>
-    </div>
+  <!-- Photo gallery / hero -->
+  <div class="detail-gallery" [class.detail-gallery--single]="allPhotos.length <= 1">
+    <ng-container *ngIf="allPhotos.length > 0; else noPhoto">
+      <img class="detail-gallery__main" [src]="allPhotos[0]" [alt]="church.name" />
+      <div *ngIf="allPhotos.length > 1" class="detail-gallery__grid">
+        <img *ngFor="let p of allPhotos.slice(1, 5)" [src]="p" [alt]="church.name" />
+      </div>
+    </ng-container>
+    <ng-template #noPhoto>
+      <div class="detail-gallery__placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1"
+            d="M3 21V7l9-4 9 4v14M9 21V11h6v10" />
+        </svg>
+      </div>
+    </ng-template>
   </div>
 
   <div class="detail-main">
 
-    <!-- Left column -->
+    <!-- ── Left column ────────────────────────────────────────── -->
     <div class="detail-content">
 
       <!-- Name + basics -->
@@ -70,16 +75,29 @@
         <p *ngIf="church.denomination_path?.length" class="church-intro__path">
           {{ church.denomination_path!.join(' › ') }}
         </p>
+
+        <!-- Google rating row -->
+        <div *ngIf="church.google_rating" class="church-intro__rating">
+          <span class="rating-stars">{{ starStr(church.google_rating) }}</span>
+          <span class="rating-score">{{ church.google_rating }}</span>
+          <span *ngIf="church.google_review_count" class="rating-count">
+            ({{ church.google_review_count | number }} Google reviews)
+          </span>
+          <a *ngIf="mapsUrl" [href]="mapsUrl" target="_blank" rel="noopener" class="rating-source">
+            <span class="pi pi-external-link"></span>
+          </a>
+        </div>
+
         <div class="church-intro__meta">
           <span *ngIf="church.street_address">
             <span class="pi pi-map-marker"></span>
             {{ church.street_address }}, {{ church.city }}, {{ church.state }} {{ church.zip }}
           </span>
-          <span *ngIf="church.size">
+          <span *ngIf="getSizeFull(church)">
             <span class="pi pi-users"></span>
-            {{ church.size === 'small' ? 'Small congregation' : church.size === 'medium' ? 'Mid-size congregation' : 'Large congregation' }}
+            {{ getSizeFull(church) }}
           </span>
-          <span *ngIf="!church.size && church.average_attendance">
+          <span *ngIf="!getSizeFull(church) && church.average_attendance">
             <span class="pi pi-users"></span>
             ~{{ church.average_attendance.toLocaleString() }} avg. attendance
           </span>
@@ -140,9 +158,32 @@
           </div>
         </div>
       </section>
+
+      <!-- Google reviews -->
+      <section *ngIf="sortedReviews.length" class="detail-section">
+        <h2 class="detail-section__title">
+          What People Are Saying
+          <span *ngIf="church.google_review_count" class="review-section__count">
+            {{ church.google_review_count | number }} total Google reviews
+          </span>
+        </h2>
+        <div class="reviews-list">
+          <div *ngFor="let review of sortedReviews" class="review-card">
+            <div class="review-card__header">
+              <span class="review-card__author">{{ review.author_name || 'Anonymous' }}</span>
+              <span class="review-card__stars">{{ starStr(review.rating) }}</span>
+              <span *ngIf="review.review_date" class="review-card__date">
+                {{ review.review_date | date:'MMM y' }}
+              </span>
+            </div>
+            <p class="review-card__text">{{ review.text }}</p>
+          </div>
+        </div>
+      </section>
+
     </div>
 
-    <!-- Right sidebar -->
+    <!-- ── Right sidebar ──────────────────────────────────────── -->
     <aside class="detail-sidebar">
 
       <!-- Service times -->
@@ -150,15 +191,29 @@
         <h3 class="sidebar-card__title">
           <span class="pi pi-clock"></span> Service Times
         </h3>
-        <div *ngIf="sortedDays.length; else noTimes" class="service-times">
-          <div *ngFor="let day of sortedDays" class="service-day">
-            <p class="service-day__name">{{ DAY_NAMES[day] }}</p>
-            <div *ngFor="let mt of meetingsForDay(day)" class="service-time">
-              <span class="service-time__name">{{ mt.service_name || 'Service' }}</span>
-              <span class="service-time__hour">{{ formatTime(mt.start_time) }}</span>
+        <ng-container *ngIf="sortedDays.length; else noTimes">
+          <div class="service-times">
+            <div *ngFor="let day of sortedDays" class="service-day">
+              <p class="service-day__name">{{ DAY_NAMES[day] }}</p>
+              <!-- From meeting_times table -->
+              <ng-container *ngIf="meetingsForDay(day).length">
+                <div *ngFor="let mt of meetingsForDay(day)" class="service-time">
+                  <span class="service-time__name">{{ mt.service_name || 'Service' }}</span>
+                  <span class="service-time__hour">{{ formatTime(mt.start_time) }}</span>
+                </div>
+              </ng-container>
+              <!-- From hours JSONB (Google data) -->
+              <ng-container *ngIf="!meetingsForDay(day).length && hoursForDay(day).length">
+                <div *ngFor="let h of hoursForDay(day)" class="service-time">
+                  <span class="service-time__name">Open</span>
+                  <span class="service-time__hour">
+                    {{ formatTime(h.open) }}{{ h.close ? ' – ' + formatTime(h.close) : '' }}
+                  </span>
+                </div>
+              </ng-container>
             </div>
           </div>
-        </div>
+        </ng-container>
         <ng-template #noTimes><p class="sidebar-card__empty">No times listed</p></ng-template>
       </div>
 
@@ -181,8 +236,37 @@
         </div>
       </div>
 
+      <!-- Social links -->
+      <div *ngIf="hasSocialLinks" class="sidebar-card">
+        <h3 class="sidebar-card__title">
+          <span class="pi pi-share-alt"></span> Connect
+        </h3>
+        <div class="social-links">
+          <a *ngIf="church.social_links?.facebook" [href]="church.social_links!.facebook" target="_blank" rel="noopener" class="social-link social-link--facebook">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"/></svg>
+            Facebook
+          </a>
+          <a *ngIf="church.social_links?.instagram" [href]="church.social_links!.instagram" target="_blank" rel="noopener" class="social-link social-link--instagram">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
+            Instagram
+          </a>
+          <a *ngIf="church.social_links?.youtube" [href]="church.social_links!.youtube" target="_blank" rel="noopener" class="social-link social-link--youtube">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M22.54 6.42a2.78 2.78 0 0 0-1.95-1.96C18.88 4 12 4 12 4s-6.88 0-8.59.46a2.78 2.78 0 0 0-1.95 1.96A29 29 0 0 0 1 12a29 29 0 0 0 .46 5.58A2.78 2.78 0 0 0 3.41 19.6C5.12 20 12 20 12 20s6.88 0 8.59-.46a2.78 2.78 0 0 0 1.95-1.95A29 29 0 0 0 23 12a29 29 0 0 0-.46-5.58z"/><polygon fill="white" points="9.75 15.02 15.5 12 9.75 8.98 9.75 15.02"/></svg>
+            YouTube
+          </a>
+          <a *ngIf="church.social_links?.twitter" [href]="church.social_links!.twitter" target="_blank" rel="noopener" class="social-link social-link--twitter">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+            X / Twitter
+          </a>
+          <a *ngIf="church.social_links?.tiktok" [href]="church.social_links!.tiktok" target="_blank" rel="noopener" class="social-link social-link--tiktok">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.32 6.32 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V8.55a8.18 8.18 0 004.79 1.52V6.62a4.85 4.85 0 01-1.02.07z"/></svg>
+            TikTok
+          </a>
+        </div>
+      </div>
+
       <!-- Google Maps -->
-      <a *ngIf="church.lat && church.lng" [href]="mapsUrl" target="_blank" rel="noopener" class="maps-btn">
+      <a [href]="mapsUrl" target="_blank" rel="noopener" class="maps-btn">
         <span class="pi pi-map-marker"></span>
         Open in Google Maps
       </a>

@@ -75,26 +75,98 @@ html, body {
 .leaflet-container { font-family: inherit !important; background: #f0ebe3 !important; }
 .leaflet-marker-icon { overflow: visible !important; }
 
-/* church map pins */
-.cmap-pin {
-  background: white;
-  border: 1.5px solid #a8a29e;
-  border-radius: 20px;
-  padding: 3px 9px;
+/* ── Individual church map pills (Zillow-style) ──────────────── */
+.cmap-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #7c2d12;
+  border: 1.5px solid rgba(255,255,255,0.18);
+  border-radius: 10px;
+  padding: 4px 10px;
+  font-family: system-ui, -apple-system, sans-serif;
   font-size: 11px;
   font-weight: 700;
-  color: #1c1917;
+  color: white;
   white-space: nowrap;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  letter-spacing: 0.02em;
   cursor: pointer;
-  transition: transform 0.12s, background 0.12s, border-color 0.12s, box-shadow 0.12s;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.32), inset 0 1px 0 rgba(255,255,255,0.12);
+  transition: transform 0.1s, background 0.1s, box-shadow 0.1s;
+  user-select: none;
+}
+.cmap-pill--hovered {
+  background: #b45309;
+  transform: scale(1.12);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.38);
+  z-index: 900 !important;
+}
+.cmap-pill--selected {
+  background: white;
+  color: #7c2d12;
+  border-color: #7c2d12;
+  border-width: 2px;
+  transform: scale(1.18);
+  box-shadow: 0 4px 18px rgba(124,45,18,0.5);
+  z-index: 1000 !important;
+}
+
+/* ── Cluster markers ──────────────────────────────────────────── */
+.cmap-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #1c1917;
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  transition: transform 0.12s;
+  width: 44px; height: 44px;
+  &:hover { transform: scale(1.1); }
+}
+.cmap-cluster--sm { width: 36px; height: 36px; background: #57534e; }
+.cmap-cluster--md { width: 44px; height: 44px; background: #44403c; }
+.cmap-cluster--lg { width: 52px; height: 52px; background: #292524; }
+.cmap-cluster--xl { width: 60px; height: 60px; background: #1c1917; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+.cmap-cluster__count {
+  font-size: 13px;
+  font-weight: 800;
   font-family: system-ui, sans-serif;
+  line-height: 1;
 }
-.cmap-pin--hovered {
-  background: #1c1917; color: white; border-color: #1c1917;
-  box-shadow: 0 3px 10px rgba(0,0,0,0.22); transform: scale(1.08); z-index: 900 !important;
+
+/* ── State-level bubbles ─────────────────────────────────────── */
+.cmap-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(154, 52, 18, 0.85);
+  color: white;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(154,52,18,0.35);
+  backdrop-filter: blur(2px);
+  transition: transform 0.12s;
+  width: 56px; height: 56px;
+  &:hover { transform: scale(1.08); }
 }
-.cmap-pin--selected {
-  background: #9A3412; color: white; border-color: #9A3412;
-  box-shadow: 0 4px 14px rgba(154,52,18,0.35); transform: scale(1.15); z-index: 1000 !important;
+.cmap-state--sm { width: 48px; height: 48px; opacity: 0.75; }
+.cmap-state--md { width: 56px; height: 56px; opacity: 0.85; }
+.cmap-state--lg { width: 66px; height: 66px; }
+.cmap-state--xl { width: 80px; height: 80px; box-shadow: 0 4px 20px rgba(154,52,18,0.4); }
+.cmap-state__abbr {
+  font-size: 13px;
+  font-weight: 800;
+  font-family: system-ui, sans-serif;
+  line-height: 1;
+}
+.cmap-state__count {
+  font-size: 9px;
+  font-weight: 600;
+  font-family: system-ui, sans-serif;
+  opacity: 0.9;
+  margin-top: 1px;
 }
