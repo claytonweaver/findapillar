@@ -67,7 +67,8 @@ export class ChurchSearchService {
     }
 
     if (filters.denominationIds.length > 0) {
-      const expanded = this.denominationService.expandToDescendants(denominations, filters.denominationIds);
+      const pruned   = this.denominationService.pruneAncestors(denominations, filters.denominationIds);
+      const expanded = this.denominationService.expandToDescendants(denominations, pruned);
       query = query.in('denomination_id', expanded);
     }
 

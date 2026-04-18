@@ -60,6 +60,13 @@ interface StateGroup {
     <div class="map-wrap">
       <!-- Toolbar -->
       <div class="map-toolbar">
+        <!-- Label mode toggle -->
+        <div class="map-label-toggle">
+          <button class="map-label-btn" [class.map-label-btn--active]="labelMode === 'denom'"    (click)="setLabelMode('denom')">Tradition</button>
+          <button class="map-label-btn" [class.map-label-btn--active]="labelMode === 'rating'"   (click)="setLabelMode('rating')">Rating</button>
+          <button class="map-label-btn" [class.map-label-btn--active]="labelMode === 'acronym'"  (click)="setLabelMode('acronym')">Initials</button>
+        </div>
+
         @if (!drawMode && !drawnPolygon) {
           <button class="map-tool-btn" (click)="startDraw()" title="Draw area to filter">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -135,6 +142,18 @@ interface StateGroup {
       position: absolute; top: 0.75rem; right: 0.75rem; z-index: 1000;
       display: flex; align-items: center; gap: 0.5rem;
     }
+    .map-label-toggle {
+      display: flex; border-radius: 999px; overflow: hidden;
+      border: 1.5px solid var(--sanctuary-border);
+      background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+    }
+    .map-label-btn {
+      padding: 0.35rem 0.65rem; font-size: 0.7rem; font-weight: 600;
+      color: var(--sanctuary-muted); background: none; border: none;
+      cursor: pointer; transition: all 0.12s; white-space: nowrap;
+    }
+    .map-label-btn:not(:last-child) { border-right: 1px solid var(--sanctuary-border); }
+    .map-label-btn--active { background: var(--sanctuary-text); color: white; }
     .map-tool-btn {
       display: flex; align-items: center; gap: 0.375rem;
       padding: 0.4rem 0.75rem; border-radius: 999px;
@@ -206,6 +225,7 @@ export class ChurchMapComponent implements AfterViewInit, OnChanges, OnDestroy {
 
   selectedChurch: Church | null = null;
   formatAtt = formatAttendance;
+  labelMode: 'denom' | 'rating' | 'acronym' = 'denom';
 
   drawMode = false;
   isDrawing = false;
@@ -367,8 +387,10 @@ export class ChurchMapComponent implements AfterViewInit, OnChanges, OnDestroy {
       center: [39.5, -98.35], zoom: 4,
       zoomControl: true, scrollWheelZoom: true,
     });
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap contributors', maxZoom: 19,
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> © <a href="https://carto.com/attributions">CARTO</a>',
+      subdomains: 'abcd',
+      maxZoom: 19,
     }).addTo(this.map);
 
     this.currentZoom = this.map.getZoom();
@@ -499,7 +521,7 @@ export class ChurchMapComponent implements AfterViewInit, OnChanges, OnDestroy {
 
   private addIndividualMarker(L: any, church: Church, compact: boolean): void {
     const label = this.getPillLabel(church);
-    const w = Math.max(30, label.length * 8 + 22);
+    const w = Math.max(36, label.length * 6.5 + 18);
 
     const html = `<div class="cmap-pill" data-id="${church.id}">${label}</div>`;
 
@@ -532,25 +554,49 @@ export class ChurchMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     }
   }
 
+  setLabelMode(mode: 'denom' | 'rating' | 'acronym'): void {
+    this.labelMode = mode;
+    this.syncMarkers();
+    this.cdr.markForCheck();
+  }
+
   private getPillLabel(church: Church): string {
+    if (this.labelMode === 'rating') {
+      return church.google_rating ? `${church.google_rating} ★` : '—';
+    }
+    if (this.labelMode === 'acronym') {
+      return this.toAcronym(church.name);
+    }
+    // denom mode (default)
     const denom = church.denomination_path?.[church.denomination_path.length - 1] ?? '';
     if (denom) {
-      if (/baptist/i.test(denom))            return 'Bapt';
-      if (/catholic/i.test(denom))           return 'Cath';
-      if (/methodist/i.test(denom))          return 'Meth';
-      if (/presbyterian/i.test(denom))       return 'Pres';
-      if (/lutheran/i.test(denom))           return 'Luth';
-      if (/episcopal/i.test(denom))          return 'Epis';
-      if (/pentecostal/i.test(denom))        return 'Pent';
-      if (/non.?denom/i.test(denom))         return 'N/D';
-      if (/orthodox/i.test(denom))           return 'Orth';
-      if (/assembly|assemblies/i.test(denom))return 'A/G';
-      if (/church of christ/i.test(denom))   return 'CoC';
-      if (/adventist/i.test(denom))          return 'Adv';
-      if (/reformed/i.test(denom))           return 'Ref';
-      if (/evangelical/i.test(denom))        return 'Evan';
+      if (/baptist/i.test(denom))             return 'Baptist';
+      if (/catholic/i.test(denom))            return 'Catholic';
+      if (/methodist/i.test(denom))           return 'Methodist';
+      if (/presbyterian/i.test(denom))        return 'Presby';
+      if (/lutheran/i.test(denom))            return 'Lutheran';
+      if (/episcopal/i.test(denom))           return 'Episcopal';
+      if (/pentecostal/i.test(denom))         return 'Pentecostal';
+      if (/non.?denom/i.test(denom))          return 'Non-Denom';
+      if (/orthodox/i.test(denom))            return 'Orthodox';
+      if (/assembly|assemblies/i.test(denom)) return 'Assembly';
+      if (/church of christ/i.test(denom))    return 'Ch. of Christ';
+      if (/adventist/i.test(denom))           return 'Adventist';
+      if (/reformed/i.test(denom))            return 'Reformed';
+      if (/evangelical/i.test(denom))         return 'Evangelical';
+      if (/congregational/i.test(denom))      return 'Congreg.';
+      if (/unitarian/i.test(denom))           return 'Unitarian';
     }
-    const size = getSizeLabel(church);
-    return size === '•' ? '✝' : size;
+    if (church.google_rating) return `${church.google_rating} ★`;
+    return 'Church';
+  }
+
+  private toAcronym(name: string): string {
+    const skip = /^(the|of|and|in|at|for|a|an|de|la|church|chapel|fellowship)$/i;
+    return name.split(/\s+/)
+      .filter(w => w.length > 1 && !skip.test(w))
+      .map(w => w[0].toUpperCase())
+      .join('')
+      .slice(0, 4);
   }
 }

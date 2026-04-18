@@ -168,9 +168,32 @@ async function placesGetDetails(placeId: string): Promise<GooglePlaceDetails> {
   return res.json()
 }
 
-/** Returns a publicly accessible photo URL (no redirect needed) */
-function placePhotoUrl(photoName: string, maxW = 1200, maxH = 900): string {
-  return `${PLACES_BASE}/${photoName}/media?maxWidthPx=${maxW}&maxHeightPx=${maxH}&skipHttpRedirect=true&key=${GOOGLE_PLACES_API_KEY}`
+/** Returns a Street View Static API URL if imagery exists at these coords, null otherwise */
+async function resolveStreetViewUrl(lat: number, lng: number): Promise<string | null> {
+  if (!GOOGLE_PLACES_API_KEY) return null
+  const meta = `https://maps.googleapis.com/maps/api/streetview/metadata?location=${lat},${lng}&key=${GOOGLE_PLACES_API_KEY}`
+  try {
+    const res = await fetch(meta)
+    if (!res.ok) return null
+    const data = await res.json() as any
+    if (data.status !== 'OK') return null
+    return `https://maps.googleapis.com/maps/api/streetview?size=800x500&location=${lat},${lng}&fov=90&pitch=5&key=${GOOGLE_PLACES_API_KEY}`
+  } catch {
+    return null
+  }
+}
+
+/** Resolves a Places photo name to a direct CDN image URL (no API key in stored URL) */
+async function resolvePhotoUrl(photoName: string, maxW = 1200, maxH = 900): Promise<string | null> {
+  const url = `${PLACES_BASE}/${photoName}/media?maxWidthPx=${maxW}&maxHeightPx=${maxH}&skipHttpRedirect=true&key=${GOOGLE_PLACES_API_KEY}`
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return null
+    const data = await res.json() as any
+    return data.photoUri ?? null
+  } catch {
+    return null
+  }
 }
 
 function convertGoogleHours(hours: GooglePlaceDetails['regularOpeningHours']): ChurchHours {
@@ -204,7 +227,9 @@ async function discoverViaGooglePlaces(city: string, state: string): Promise<Chu
       if (!place.id) continue
       try {
         const details = await placesGetDetails(place.id)
-        const photos  = (details.photos ?? []).slice(0, 5).map(p => placePhotoUrl(p.name))
+        const photos  = (await Promise.all(
+          (details.photos ?? []).slice(0, 5).map(p => resolvePhotoUrl(p.name))
+        )).filter((u): u is string => !!u)
         const reviews = (details.reviews ?? []).map(r => ({
           authorAttribution: r.authorAttribution,
           rating: r.rating,
@@ -502,18 +527,42 @@ RULES:
 
 // ── Denomination lookup ───────────────────────────────────────────────────────
 
+// Map LLM denomination strings that don't exist verbatim in the DB
+const DENOM_ALIASES: [RegExp, string][] = [
+  [/evangelical/i,          'Non-Denominational'],
+  [/church of christ/i,     'Protestant'],
+  [/churches of christ/i,   'Protestant'],
+  [/independent baptist/i,  'Baptist'],
+  [/free will baptist/i,    'Baptist'],
+  [/bible church/i,         'Non-Denominational'],
+  [/community church/i,     'Non-Denominational'],
+  [/christian church/i,     'Non-Denominational'],
+  [/interdenominational/i,  'Non-Denominational'],
+]
+
 async function findDenomination(name: string | null) {
   if (!name) return { id: null, path: null }
-  let { data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', name).limit(1).single()
+
+  // Apply alias mapping first
+  let lookupName = name
+  for (const [pattern, alias] of DENOM_ALIASES) {
+    if (pattern.test(name)) { lookupName = alias; break }
+  }
+
+  let { data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', lookupName).limit(1).maybeSingle()
+  if (!data && lookupName !== name) {
+    // Alias didn't match exactly — try original name
+    ;({ data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', name).limit(1).maybeSingle() as any)
+  }
   if (!data) {
     const word = name.split(/\s+/).find(w => w.length > 4)
-    if (word) ({ data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', `%${word}%`).limit(1).single())
+    if (word) ({ data } = await supabase.from('denominations').select('id, name, parent_id').ilike('name', `%${word}%`).limit(1).maybeSingle() as any)
   }
   if (!data) return { id: null, path: null }
   const path: string[] = [data.name]
   let cur = data
   for (let i = 0; i < 5 && cur.parent_id; i++) {
-    const { data: p } = await supabase.from('denominations').select('id, name, parent_id').eq('id', cur.parent_id).single()
+    const { data: p } = await supabase.from('denominations').select('id, name, parent_id').eq('id', cur.parent_id).maybeSingle()
     if (!p) break
     path.unshift(p.name)
     cur = p
@@ -686,10 +735,13 @@ async function processChurch(record: ChurchRecord, force: boolean): Promise<'enr
       record.googleRating ?? null, reviewSnippets,
     )
 
-    // 5. Best available photo
+    // 5. Best available photo (Google Places → og:image → Facebook → Street View exterior)
     const googleCover = record.googlePhotos?.[0] ?? null
-    const coverPhoto  = googleCover ?? websiteData.ogImage ?? fbData.coverPhoto ?? null
-    const photos      = [
+    let coverPhoto    = googleCover ?? websiteData.ogImage ?? fbData.coverPhoto ?? null
+    if (!coverPhoto && record.lat && record.lng) {
+      coverPhoto = await resolveStreetViewUrl(record.lat, record.lng)
+    }
+    const photos = [
       ...(record.googlePhotos ?? []),
       ...(websiteData.ogImage ? [websiteData.ogImage] : []),
     ].filter((v, i, a) => a.indexOf(v) === i).slice(0, 8)

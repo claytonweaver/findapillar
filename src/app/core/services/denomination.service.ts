@@ -26,6 +26,18 @@ export class DenominationService {
     shareReplay(1)
   );
 
+  /**
+   * Remove any selected ID whose subtree contains another selected ID.
+   * e.g. [Protestant, Baptist] → [Baptist]  (Baptist is already Protestant)
+   */
+  pruneAncestors(flat: Denomination[], selectedIds: string[]): string[] {
+    const selectedSet = new Set(selectedIds);
+    const hasSelectedDescendant = (id: string): boolean =>
+      flat.filter(d => d.parent_id === id)
+          .some(d => selectedSet.has(d.id) || hasSelectedDescendant(d.id));
+    return selectedIds.filter(id => !hasSelectedDescendant(id));
+  }
+
   /** Given a set of selected denomination IDs, expand to include all descendant IDs. */
   expandToDescendants(flat: Denomination[], selectedIds: string[]): string[] {
     if (!selectedIds.length) return [];

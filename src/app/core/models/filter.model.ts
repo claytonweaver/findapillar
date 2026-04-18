@@ -40,12 +40,21 @@ export const SERVICE_STYLE_OPTIONS = [
   { label: 'Liturgical', value: 'liturgical' },
 ];
 
-export const TAG_OPTIONS = [
-  'LGBT-affirming', 'Women pastors', 'Women deaconesses',
-  'Expository preaching', 'Reformed theology', 'Liturgical worship',
-  'Traditional worship', 'Contemporary worship', 'Charismatic gifts',
-  'Healing ministry', 'Missions focused', 'Social justice focused',
-  'Multi-ethnic', 'Young adults', 'College ministry', 'Family-focused',
-  'Small groups', 'Recovery ministry', 'Seeker-friendly', 'Urban ministry',
-  'Historic church', 'Deaf ministry',
+export const TAG_OPTIONS: { label: string; value: string }[] = [
+  { label: 'Reformed theology',  value: 'reformed'          },
+  { label: 'Evangelical',        value: 'evangelical'        },
+  { label: 'Charismatic',        value: 'charismatic'        },
+  { label: 'Progressive',        value: 'progressive'        },
+  { label: 'LGBT-affirming',     value: 'lgbt-affirming'     },
+  { label: 'Women pastors',      value: 'women-pastors'      },
+  { label: 'Missions focused',   value: 'missions-focused'   },
+  { label: 'Social justice',     value: 'social-justice'     },
+  { label: 'Multi-ethnic',       value: 'multi-ethnic'       },
+  { label: 'Young adults',       value: 'young-adults'       },
+  { label: 'Family-focused',     value: 'families'           },
+  { label: 'Recovery ministry',  value: 'recovery-ministry'  },
+  { label: 'Food pantry',        value: 'food-pantry'        },
+  { label: 'Counseling',         value: 'counseling'         },
+  { label: 'Prison ministry',    value: 'prison-ministry'    },
+  { label: 'Deaf ministry',      value: 'deaf-ministry'      },
 ];

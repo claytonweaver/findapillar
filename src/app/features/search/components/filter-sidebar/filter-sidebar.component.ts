@@ -82,9 +82,9 @@ function getFamily(flat: Denomination[], id: string): string | null {
             <button
               *ngFor="let tag of tagOptions"
               class="filter-chip"
-              [class.filter-chip--active]="draft.tags.includes(tag)"
-              (click)="toggleTag(tag)"
-            >{{ tag }}</button>
+              [class.filter-chip--active]="draft.tags.includes(tag.value)"
+              (click)="toggleTag(tag.value)"
+            >{{ tag.label }}</button>
           </div>
         </section>
 
