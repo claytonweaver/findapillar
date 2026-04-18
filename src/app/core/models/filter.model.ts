@@ -5,6 +5,7 @@ export interface ChurchFilters {
   tags: string[];
   state: string;
   city: string;
+  zip: string;
 }
 
 export const DEFAULT_FILTERS: ChurchFilters = {
@@ -14,6 +15,7 @@ export const DEFAULT_FILTERS: ChurchFilters = {
   tags: [],
   state: '',
   city: '',
+  zip: '',
 };
 
 export function isDefaultFilters(f: ChurchFilters): boolean {

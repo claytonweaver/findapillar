@@ -97,6 +97,42 @@
   &:hover { color: var(--sanctuary-text); }
 }
 
+/* City suggestions dropdown */
+.search-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--sanctuary-surface);
+  border: 1.5px solid var(--sanctuary-border);
+  border-radius: 1rem;
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem 0;
+  z-index: 200;
+  box-shadow: var(--sanctuary-shadow);
+  overflow: hidden;
+}
+
+.search-suggestions__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  color: var(--sanctuary-text);
+  cursor: pointer;
+  transition: background 0.1s;
+
+  &:hover { background: var(--sanctuary-bg); }
+}
+
+.search-suggestions__icon {
+  color: var(--sanctuary-muted);
+  font-size: 0.75rem;
+  flex-shrink: 0;
+}
+
 /* Header buttons */
 .header-btn {
   display: flex;

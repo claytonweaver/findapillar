@@ -24,10 +24,22 @@
         placeholder="Search by name, city, or denomination…"
         [(ngModel)]="searchQuery"
         (ngModelChange)="onSearchChange($event)"
+        (blur)="hideSuggestions()"
+        autocomplete="off"
       />
       <button *ngIf="searchQuery" class="search-wrap__clear" (click)="clearSearch()">
         <span class="pi pi-times"></span>
       </button>
+      @if (showSuggestions) {
+        <ul class="search-suggestions">
+          @for (s of suggestions; track s.label) {
+            <li class="search-suggestions__item" (mousedown)="selectSuggestion(s)">
+              <span class="pi pi-map-marker search-suggestions__icon"></span>
+              {{ s.label }}
+            </li>
+          }
+        </ul>
+      }
     </div>
 
     <!-- Filters button -->
@@ -59,9 +71,9 @@
       {{ tag }}
       <button (click)="removeTag(tag)" class="filter-pill__x pi pi-times"></button>
     </span>
-    <span *ngIf="filters.city || filters.state" class="filter-pill">
-      {{ cityStateLabel || filters.state }}
-      <button (click)="clearCity(); clearState()" class="filter-pill__x pi pi-times"></button>
+    <span *ngIf="filters.city || filters.state || filters.zip" class="filter-pill">
+      {{ locationLabel }}
+      <button (click)="clearLocation()" class="filter-pill__x pi pi-times"></button>
     </span>
     <button class="filter-pill-clear" (click)="clearAll()">Clear all</button>
   </div>

@@ -5,7 +5,7 @@ import {
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { RouterModule, ActivatedRoute } from '@angular/router';
-import { Subject, takeUntil, debounceTime, distinctUntilChanged, take } from 'rxjs';
+import { Subject, takeUntil, debounceTime, distinctUntilChanged, take, switchMap } from 'rxjs';
 import { ButtonModule } from 'primeng/button';
 import { InputTextModule } from 'primeng/inputtext';
 import { SkeletonModule } from 'primeng/skeleton';
@@ -16,6 +16,7 @@ import { TooltipModule } from 'primeng/tooltip';
 import { ChurchSearchService } from '../../core/services/church-search.service';
 import { FilterService } from '../../core/services/filter.service';
 import { DenominationService } from '../../core/services/denomination.service';
+import { LocationService, CitySuggestion } from '../../core/services/location.service';
 import { Church } from '../../core/models/church.model';
 import { ChurchFilters, activeFilterCount, DEFAULT_FILTERS } from '../../core/models/filter.model';
 import { ChurchCardComponent } from './components/church-card/church-card.component';
@@ -48,14 +49,19 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   denomNames = new Map<string, string>();
   drawPolygon: [number, number][] | null = null;
 
+  suggestions: CitySuggestion[] = [];
+  showSuggestions = false;
+
   private destroy$ = new Subject<void>();
   private searchInput$ = new Subject<string>();
+  private cityInput$ = new Subject<string>();
   private cardRefs = new Map<string, HTMLElement>();
 
   constructor(
     private readonly searchService: ChurchSearchService,
     private readonly filterService: FilterService,
     private readonly denominationService: DenominationService,
+    private readonly locationService: LocationService,
     private readonly cdr: ChangeDetectorRef,
     private readonly route: ActivatedRoute,
   ) {}
@@ -63,7 +69,9 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     // Apply location from query params (e.g. navigated from home page)
     this.route.queryParams.pipe(take(1)).subscribe(params => {
-      if (params['city'] || params['state']) {
+      if (params['zip']) {
+        this.filterService.setFilters({ ...DEFAULT_FILTERS, zip: params['zip'] });
+      } else if (params['city'] || params['state']) {
         this.filterService.setFilters({
           ...DEFAULT_FILTERS,
           city: params['city'] ?? '',
@@ -87,10 +95,26 @@ export class SearchPageComponent implements OnInit, OnDestroy {
       .pipe(takeUntil(this.destroy$))
       .subscribe(churches => { this.churches = churches; this.cdr.markForCheck(); });
 
-    // Active filters (for pill display)
+    // Active filters (for pill display); show city label in search box when city filter is active
     this.filterService.filters$
       .pipe(takeUntil(this.destroy$))
-      .subscribe(f => { this.filters = f; this.searchQuery = f.searchQuery; this.cdr.markForCheck(); });
+      .subscribe(f => {
+        this.filters = f;
+        this.searchQuery = f.zip
+          ? f.zip
+          : f.city
+            ? (f.state ? `${f.city}, ${f.state}` : f.city)
+            : f.searchQuery;
+        this.cdr.markForCheck();
+      });
+
+    // City suggestions
+    this.cityInput$.pipe(
+      debounceTime(200),
+      distinctUntilChanged(),
+      switchMap(term => this.locationService.suggestCities(term)),
+      takeUntil(this.destroy$),
+    ).subscribe(s => { this.suggestions = s; this.showSuggestions = s.length > 0; this.cdr.markForCheck(); });
 
     // Denomination name map for filter pills
     this.denominationService.denominations$
@@ -111,9 +135,15 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { this.destroy$.next(); this.destroy$.complete(); }
 
   onSearchChange(value: string): void {
+    // Full 5-digit zip
+    if (/^\d{5}$/.test(value.trim())) {
+      this.showSuggestions = false;
+      this.filterService.setFilters({ ...DEFAULT_FILTERS, zip: value.trim() });
+      return;
+    }
     const cityState = parseCityState(value);
     if (cityState) {
-      this.searchQuery = value;
+      this.showSuggestions = false;
       this.filterService.setFilters({
         ...this.filterService.current,
         city: cityState.city,
@@ -122,12 +152,27 @@ export class SearchPageComponent implements OnInit, OnDestroy {
       });
       return;
     }
+    this.cityInput$.next(value);
     this.searchInput$.next(value);
+  }
+
+  selectSuggestion(s: CitySuggestion): void {
+    this.showSuggestions = false;
+    this.filterService.setFilters({
+      ...DEFAULT_FILTERS,
+      ...(s.zip ? { zip: s.zip } : { city: s.city, state: s.state }),
+    });
+  }
+
+  hideSuggestions(): void {
+    setTimeout(() => { this.showSuggestions = false; this.cdr.markForCheck(); }, 150);
   }
 
   clearSearch(): void {
     this.searchQuery = '';
-    this.filterService.patchFilter('searchQuery', '');
+    this.suggestions = [];
+    this.showSuggestions = false;
+    this.filterService.setFilters({ ...DEFAULT_FILTERS });
   }
 
   clearCity(): void { this.filterService.patchFilter('city', ''); }
@@ -153,9 +198,14 @@ export class SearchPageComponent implements OnInit, OnDestroy {
 
   clearAll(): void { this.filterService.reset(); this.searchQuery = ''; }
 
-  get cityStateLabel(): string {
+  get locationLabel(): string {
+    if (this.filters?.zip) return this.filters.zip;
     if (this.filters?.city && this.filters?.state) return `${this.filters.city}, ${this.filters.state}`;
     return this.filters?.city ?? '';
+  }
+
+  clearLocation(): void {
+    this.filterService.setFilters({ ...this.filterService.current, city: '', state: '', zip: '' });
   }
 
   get activeFilterCount(): number { return activeFilterCount(this.filters ?? {}  as ChurchFilters); }

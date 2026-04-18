@@ -47,7 +47,8 @@ export class HomePageComponent implements OnDestroy {
   selectSuggestion(s: CitySuggestion): void {
     this.location = s.label;
     this.showSuggestions = false;
-    this.router.navigate(['/search'], { queryParams: { city: s.city, state: s.state } });
+    const params = s.zip ? { zip: s.zip } : { city: s.city, state: s.state };
+    this.router.navigate(['/search'], { queryParams: params });
   }
 
   hideSuggestions(): void {
