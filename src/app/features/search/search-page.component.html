@@ -25,6 +25,7 @@
         [(ngModel)]="searchQuery"
         (ngModelChange)="onSearchChange($event)"
         (blur)="hideSuggestions()"
+        (keydown)="onSuggestionKeyDown($event)"
         autocomplete="off"
       />
       <button *ngIf="searchQuery" class="search-wrap__clear" (click)="clearSearch()">
@@ -32,8 +33,10 @@
       </button>
       @if (showSuggestions) {
         <ul class="search-suggestions">
-          @for (s of suggestions; track s.label) {
-            <li class="search-suggestions__item" (mousedown)="selectSuggestion(s)">
+          @for (s of suggestions; track s.label; let i = $index) {
+            <li class="search-suggestions__item"
+                [class.search-suggestions__item--active]="activeSuggestionIndex === i"
+                (mousedown)="selectSuggestion(s)">
               <span class="pi pi-map-marker search-suggestions__icon"></span>
               {{ s.label }}
             </li>
@@ -49,8 +52,8 @@
       <span *ngIf="activeFilterCount > 0" class="header-btn__badge">{{ activeFilterCount }}</span>
     </button>
 
-    <!-- Map toggle -->
-    <button class="header-btn" [class.header-btn--on]="showMap" (click)="showMap = !showMap">
+    <!-- Map toggle — hidden on mobile where map isn't shown -->
+    <button class="header-btn header-btn--map" [class.header-btn--on]="showMap" (click)="showMap = !showMap">
       <span class="pi pi-map"></span>
       <span class="header-btn__label">{{ showMap ? 'Hide map' : 'Map' }}</span>
     </button>

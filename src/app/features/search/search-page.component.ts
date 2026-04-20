@@ -51,6 +51,7 @@ export class SearchPageComponent implements OnInit, OnDestroy {
 
   suggestions: CitySuggestion[] = [];
   showSuggestions = false;
+  activeSuggestionIndex = -1;
 
   private destroy$ = new Subject<void>();
   private searchInput$ = new Subject<string>();
@@ -114,7 +115,12 @@ export class SearchPageComponent implements OnInit, OnDestroy {
       distinctUntilChanged(),
       switchMap(term => this.locationService.suggestCities(term)),
       takeUntil(this.destroy$),
-    ).subscribe(s => { this.suggestions = s; this.showSuggestions = s.length > 0; this.cdr.markForCheck(); });
+    ).subscribe(s => {
+      this.suggestions = s;
+      this.activeSuggestionIndex = -1;
+      this.showSuggestions = s.length > 0;
+      this.cdr.markForCheck();
+    });
 
     // Denomination name map for filter pills
     this.denominationService.denominations$
@@ -165,7 +171,38 @@ export class SearchPageComponent implements OnInit, OnDestroy {
   }
 
   hideSuggestions(): void {
-    setTimeout(() => { this.showSuggestions = false; this.cdr.markForCheck(); }, 150);
+    setTimeout(() => {
+      this.showSuggestions = false;
+      this.activeSuggestionIndex = -1;
+      this.cdr.markForCheck();
+    }, 150);
+  }
+
+  onSuggestionKeyDown(event: KeyboardEvent): void {
+    if (!this.showSuggestions || !this.suggestions.length) return;
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        this.activeSuggestionIndex = Math.min(this.activeSuggestionIndex + 1, this.suggestions.length - 1);
+        this.cdr.markForCheck();
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        this.activeSuggestionIndex = Math.max(this.activeSuggestionIndex - 1, -1);
+        this.cdr.markForCheck();
+        break;
+      case 'Enter':
+        if (this.activeSuggestionIndex >= 0) {
+          event.preventDefault();
+          this.selectSuggestion(this.suggestions[this.activeSuggestionIndex]);
+        }
+        break;
+      case 'Escape':
+        this.showSuggestions = false;
+        this.activeSuggestionIndex = -1;
+        this.cdr.markForCheck();
+        break;
+    }
   }
 
   clearSearch(): void {

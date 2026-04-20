@@ -1,7 +1,6 @@
-import { inject, Injectable } from '@angular/core';
+import { Injectable } from '@angular/core';
 import { from, Observable, of } from 'rxjs';
 import { catchError, map } from 'rxjs/operators';
-import { SupabaseService } from './supabase.service';
 
 export interface CitySuggestion {
   city: string;
@@ -10,63 +9,65 @@ export interface CitySuggestion {
   label: string;
 }
 
+const STATE_ABBREVS: Record<string, string> = {
+  'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+  'Colorado':'CO','Connecticut':'CT','Delaware':'DE','Florida':'FL','Georgia':'GA',
+  'Hawaii':'HI','Idaho':'ID','Illinois':'IL','Indiana':'IN','Iowa':'IA','Kansas':'KS',
+  'Kentucky':'KY','Louisiana':'LA','Maine':'ME','Maryland':'MD','Massachusetts':'MA',
+  'Michigan':'MI','Minnesota':'MN','Mississippi':'MS','Missouri':'MO','Montana':'MT',
+  'Nebraska':'NE','Nevada':'NV','New Hampshire':'NH','New Jersey':'NJ','New Mexico':'NM',
+  'New York':'NY','North Carolina':'NC','North Dakota':'ND','Ohio':'OH','Oklahoma':'OK',
+  'Oregon':'OR','Pennsylvania':'PA','Rhode Island':'RI','South Carolina':'SC',
+  'South Dakota':'SD','Tennessee':'TN','Texas':'TX','Utah':'UT','Vermont':'VT',
+  'Virginia':'VA','Washington':'WA','West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY',
+};
+
 @Injectable({ providedIn: 'root' })
 export class LocationService {
-  private readonly supabase = inject(SupabaseService);
 
   suggestCities(term: string): Observable<CitySuggestion[]> {
     const t = term.trim();
-    if (!t) return of([]);
-    return /^\d+$/.test(t) ? this.suggestByZip(t) : this.suggestByCity(t);
-  }
+    if (t.length < 2) return of([]);
 
-  private suggestByCity(term: string): Observable<CitySuggestion[]> {
-    return from(
-      this.supabase.db
-        .from('churches')
-        .select('city, state')
-        .ilike('city', `${term}%`)
-        .eq('is_active', true)
-        .not('city', 'is', null)
-        .not('state', 'is', null)
-        .order('city')
-        .limit(100)
-    ).pipe(
-      map(({ data }) => {
+    const isZip = /^\d+$/.test(t);
+    const params = new URLSearchParams({
+      q: t,
+      format: 'json',
+      limit: '10',
+      addressdetails: '1',
+      countrycodes: 'us',
+      ...(isZip ? {} : { featuretype: 'city' }),
+    });
+
+    const req = fetch(`https://nominatim.openstreetmap.org/search?${params}`, {
+      headers: { 'User-Agent': 'FindAPillar/1.0', 'Accept-Language': 'en' },
+    }).then(r => r.json());
+
+    return from(req).pipe(
+      map((data: any[]) => {
         const seen = new Set<string>();
         const results: CitySuggestion[] = [];
-        for (const row of data ?? []) {
-          const key = `${row.city},${row.state}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          results.push({ city: row.city, state: row.state, label: `${row.city}, ${row.state}` });
-          if (results.length >= 8) break;
-        }
-        return results;
-      }),
-      catchError(() => of([])),
-    );
-  }
 
-  private suggestByZip(zip: string): Observable<CitySuggestion[]> {
-    return from(
-      this.supabase.db
-        .from('churches')
-        .select('city, state, zip')
-        .like('zip', `${zip}%`)
-        .eq('is_active', true)
-        .not('zip', 'is', null)
-        .order('zip')
-        .limit(100)
-    ).pipe(
-      map(({ data }) => {
-        const seen = new Set<string>();
-        const results: CitySuggestion[] = [];
-        for (const row of data ?? []) {
-          if (!row.zip || seen.has(row.zip)) continue;
-          seen.add(row.zip);
-          const cityPart = row.city && row.state ? ` — ${row.city}, ${row.state}` : '';
-          results.push({ city: row.city ?? '', state: row.state ?? '', zip: row.zip, label: `${row.zip}${cityPart}` });
+        for (const item of data ?? []) {
+          const addr = item.address ?? {};
+          const city = addr.city ?? addr.town ?? addr.village ?? addr.county ?? '';
+          const stateRaw = addr.state ?? '';
+          const stateAbbr = STATE_ABBREVS[stateRaw] ?? stateRaw;
+          const zip = addr.postcode ?? '';
+
+          if (isZip && zip) {
+            const key = zip;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const cityPart = city && stateAbbr ? ` — ${city}, ${stateAbbr}` : '';
+            results.push({ city, state: stateAbbr, zip, label: `${zip}${cityPart}` });
+          } else if (city && stateAbbr) {
+            const key = `${city},${stateAbbr}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            results.push({ city, state: stateAbbr, label: `${city}, ${stateAbbr}` });
+          }
+
           if (results.length >= 8) break;
         }
         return results;

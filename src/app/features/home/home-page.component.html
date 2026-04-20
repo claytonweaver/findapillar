@@ -30,6 +30,7 @@
           autofocus
           (ngModelChange)="onInput($event)"
           (blur)="hideSuggestions()"
+          (keydown)="onKeyDown($event)"
         />
         <button type="submit" class="home-search__btn">
           <span class="pi pi-search"></span>
@@ -37,8 +38,10 @@
 
         @if (showSuggestions) {
           <ul class="home-suggestions">
-            @for (s of suggestions; track s.label) {
-              <li class="home-suggestions__item" (mousedown)="selectSuggestion(s)">
+            @for (s of suggestions; track s.label; let i = $index) {
+              <li class="home-suggestions__item"
+                  [class.home-suggestions__item--active]="activeSuggestionIndex === i"
+                  (mousedown)="selectSuggestion(s)">
                 <span class="pi pi-map-marker home-suggestions__icon"></span>
                 {{ s.label }}
               </li>

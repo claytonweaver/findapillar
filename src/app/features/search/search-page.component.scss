@@ -18,8 +18,13 @@
 .site-header__inner {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.75rem 1.25rem;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+
+  @media (min-width: 640px) {
+    gap: 0.75rem;
+    padding: 0.75rem 1.25rem;
+  }
 }
 
 /* Logo */
@@ -124,7 +129,7 @@
   cursor: pointer;
   transition: background 0.1s;
 
-  &:hover { background: var(--sanctuary-bg); }
+  &:hover, &--active { background: var(--sanctuary-bg); }
 }
 
 .search-suggestions__icon {
@@ -166,6 +171,10 @@
 .header-btn__label {
   display: none;
   @media (min-width: 640px) { display: inline; }
+}
+.header-btn--map {
+  display: none;
+  @media (min-width: 768px) { display: flex; }
 }
 .header-btn__badge {
   background: #F59E0B;

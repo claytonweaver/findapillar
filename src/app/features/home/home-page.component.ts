@@ -17,6 +17,7 @@ export class HomePageComponent implements OnDestroy {
   location = '';
   suggestions: CitySuggestion[] = [];
   showSuggestions = false;
+  activeSuggestionIndex = -1;
 
   private readonly destroy$ = new Subject<void>();
   private readonly input$ = new Subject<string>();
@@ -33,6 +34,7 @@ export class HomePageComponent implements OnDestroy {
       takeUntil(this.destroy$),
     ).subscribe(suggestions => {
       this.suggestions = suggestions;
+      this.activeSuggestionIndex = -1;
       this.showSuggestions = suggestions.length > 0;
       this.cdr.markForCheck();
     });
@@ -52,7 +54,38 @@ export class HomePageComponent implements OnDestroy {
   }
 
   hideSuggestions(): void {
-    setTimeout(() => { this.showSuggestions = false; this.cdr.markForCheck(); }, 150);
+    setTimeout(() => {
+      this.showSuggestions = false;
+      this.activeSuggestionIndex = -1;
+      this.cdr.markForCheck();
+    }, 150);
+  }
+
+  onKeyDown(event: KeyboardEvent): void {
+    if (!this.showSuggestions || !this.suggestions.length) return;
+    switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        this.activeSuggestionIndex = Math.min(this.activeSuggestionIndex + 1, this.suggestions.length - 1);
+        this.cdr.markForCheck();
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        this.activeSuggestionIndex = Math.max(this.activeSuggestionIndex - 1, -1);
+        this.cdr.markForCheck();
+        break;
+      case 'Enter':
+        if (this.activeSuggestionIndex >= 0) {
+          event.preventDefault();
+          this.selectSuggestion(this.suggestions[this.activeSuggestionIndex]);
+        }
+        break;
+      case 'Escape':
+        this.showSuggestions = false;
+        this.activeSuggestionIndex = -1;
+        this.cdr.markForCheck();
+        break;
+    }
   }
 
   onSearch(): void {
